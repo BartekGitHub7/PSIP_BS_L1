@@ -7,3 +7,4 @@ laboratorium 1
 - Julia - hajnowski
 - Daniel - sochaczewski
 - Jan - miński
+- Jan - warszawski
