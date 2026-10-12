@@ -15,3 +15,7 @@ laboratorium 1
 - Jakub - chełmski
 - Dawid - bocheński
 - Michał - biłgorajski
+
+
+
+
