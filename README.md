@@ -10,3 +10,4 @@ laboratorium 1
 - Jan - warszawski
 - Tymoteusz - toruński
 - Marcin - miński
+- Dominik - koniński
