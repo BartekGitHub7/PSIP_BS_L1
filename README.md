@@ -4,3 +4,4 @@ laboratorium 1
 - Marcin - miński
 - Jakub - chełmski
 - Stanisław - turecki
+- Dominik - koniński
