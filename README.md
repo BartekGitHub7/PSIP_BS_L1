@@ -1,7 +1,7 @@
 # PSIP\_BS\_L1
 
 laboratorium 1
-
+- Stanisław - turecki
 * Bartek - radomszczański
 * Maciej - kutnowski
 - Julia - hajnowski
