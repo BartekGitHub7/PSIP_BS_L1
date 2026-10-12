@@ -5,4 +5,4 @@ laboratorium 1
 * Bartek - radomszczański
 * Maciej - kutnowski
 - Julia - hajnowski
-- Tymoteusz - toruński
+
