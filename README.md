@@ -5,3 +5,4 @@ laboratorium 1
 - Jakub - chełmski
 - Stanisław - turecki
 - Dominik - koniński
+- Kacper - legnicki
