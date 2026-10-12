@@ -3,3 +3,4 @@ laboratorium 1
 - Bartek - radomszczański
 - Marcin - miński
 - Jakub - chełmski
+- Stanisław - turecki
