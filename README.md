@@ -12,3 +12,4 @@ laboratorium 1
 - Marcin - miński
 - Dominik - koniński
 - Kacper - legnicki
+- Jakub - chełmski
