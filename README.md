@@ -13,3 +13,4 @@ laboratorium 1
 - Dominik - koniński
 - Kacper - legnicki
 - Jakub - chełmski
+- Dawid - bocheński
