@@ -8,3 +8,4 @@ laboratorium 1
 - Daniel - sochaczewski
 - Jan - miński
 - Jan - warszawski
+- Tymoteusz - toruński
