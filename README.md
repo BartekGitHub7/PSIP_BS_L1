@@ -9,3 +9,4 @@ laboratorium 1
 - Jan - miński
 - Jan - warszawski
 - Tymoteusz - toruński
+- Marcin - miński
