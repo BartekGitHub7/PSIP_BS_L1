@@ -11,3 +11,4 @@ laboratorium 1
 - Tymoteusz - toruński
 - Marcin - miński
 - Dominik - koniński
+- Kacper - legnicki
