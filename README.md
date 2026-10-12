@@ -14,3 +14,4 @@ laboratorium 1
 - Kacper - legnicki
 - Jakub - chełmski
 - Dawid - bocheński
+- Michał - biłgorajski
