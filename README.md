@@ -6,3 +6,4 @@ laboratorium 1
 * Maciej - kutnowski
 - Julia - hajnowski
 - Daniel - sochaczewski
+- Jan - miński
