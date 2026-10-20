@@ -1,0 +1,21 @@
+services:
+  postgis:
+    build:
+      context: .
+      dockerfile: docker/postgis/Dockerfile
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Brak POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Brak POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?Brak POSTGRES_DB}
+
+    ports:
+      - "${POSTGRES_PORT:?Brak POSTGRES_PORT}:5432"
+
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+    restart: unless-stopped
+
+volumes:
+  pgdata:
