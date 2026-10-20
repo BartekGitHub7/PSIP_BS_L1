@@ -13,34 +13,23 @@ permissions:
 jobs:
   start-db:
     runs-on: self-hosted
-    environment: ${{ github.ref_name }}
-    env:
-      POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
-      POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-      POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+    environment:
+      name: ${{ github.ref_name }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Select database port
-        shell: bash
-        run: |
-          case "$GITHUB_REF_NAME" in
-            env-test) port=5444 ;;
-            env-qa)   port=5445 ;;
-            main)     port=5446 ;;
-          esac
-
-          echo "POSTGRES_PORT=$port" >> "$GITHUB_ENV"
-
       - name: Start PostGIS
-        shell: bash
+        env:
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
         run: |
-          docker compose \
-            -f docker-compose-remote.yml \
-            -p "remote-db-$GITHUB_REF_NAME" \
-            up -d --build
+          docker compose -f docker-compose-remote.yml -p "remote-db-$GITHUB_REF_NAME" up -d
 
       - name: Show running containers
-        run: docker ps
+        run: |
+          docker ps
+          docker volume ls | grep remote-db || true

@@ -1,8 +1,7 @@
 services:
   postgis:
-    build:
-      context: .
-      dockerfile: docker/postgis/Dockerfile
+    image: psip_bs_l1-postgis:latest
+    pull_policy: never
 
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?Brak POSTGRES_USER}
