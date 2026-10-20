@@ -1,0 +1,46 @@
+name: Stop Remote Database
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_environment:
+        description: "Srodowisko do zatrzymania"
+        required: true
+        default: env-test
+        type: choice
+        options:
+          - env-test
+          - env-qa
+          - main
+
+permissions:
+  contents: read
+
+jobs:
+  stop-db:
+    runs-on: self-hosted
+
+    environment:
+      name: ${{ inputs.target_environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_environment }}
+
+      - name: Stop PostGIS
+        env:
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+          POSTGRES_PORT: ${{ secrets.POSTGRES_PORT }}
+          ENVIRONMENT: ${{ inputs.target_environment }}
+        run: |
+          docker compose -f docker-compose-remote.yml -p "remote-db-$ENVIRONMENT" stop postgis
+
+      - name: Show environment containers
+        env:
+          ENVIRONMENT: ${{ inputs.target_environment }}
+        run: |
+          docker ps -a --filter "label=com.docker.compose.project=remote-db-$ENVIRONMENT"
