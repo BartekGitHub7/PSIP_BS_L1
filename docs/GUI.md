@@ -4,9 +4,17 @@
 
 Natywna aplikacja do przeglądania warstw PostGIS, siatek H3 i przyszłych wyników przejezdności. Interfejs korzysta z Tkinter i lokalnego renderowania kafelków MVT. Nie wymaga QGIS do samego wyświetlania, choć QGIS pozostaje narzędziem niezależnej kontroli danych.
 
-## Wymagania
+## Wygląd i uruchomienie dwuklikiem
 
-Windows, Python z Tkinter, Docker Desktop z uruchomioną bazą env-test i pliki katalogu gui z aktualnej paczki PSIP_Tkinter_MVT.zip. Pakiety instalowane są w lokalnym .venv-gui; to inne środowisko niż Python w kontenerze do importu danych.
+Stały ciemny motyw: tło granatowe, jasny tekst, niebieski przycisk dodawania, jednolity panel warstw i ciemne tabele. Ikona aplikacji jest generowana lokalnie. Na obsługiwanym Windowsie także pasek tytułu korzysta z ciemnego wyglądu; natywne komunikaty systemowe mogą podlegać motywowi Windows.
+
+Gotowa paczka Windows nie wymaga instalowania Pythona na komputerze odbiorcy. Po rozpakowaniu uruchom PSIP_Mapa.exe. **Pozostaw cały folder aplikacji, łącznie z _internal.** Baza PostGIS i dostęp do niej są nadal wymagane.
+
+[Jak pobrać i zbudować EXE](WINDOWS_EXE.md)
+
+## Wymagania przy uruchamianiu ze źródeł
+
+Windows, Python z Tkinter, Docker Desktop z uruchomioną bazą env-test i aktualny kod z brancha feature/gui-tkinter. Pakiety instalowane są w lokalnym .venv-gui; to inne środowisko niż Python w kontenerze do importu danych.
 
 W katalogu projektu:
 
@@ -25,7 +33,7 @@ Aktualna paczka wymaga co najmniej Pythona 3.10; sprawdzaj też wymagania instal
 
 ## Dodanie danych
 
-1. Kliknij Dodaj dane z PostGIS.
+1. Kliknij ＋ Dodaj dane.
 2. Wpisz host localhost, port 5444, bazę psip, użytkownika psip oraz własne hasło środowiska TEST.
 3. Kliknij Połącz. Katalog obejmuje schematy grid, bdot, public.
 4. Zaznacz np. grid.h3_r8_3857; Ctrl umożliwia wybór kilku warstw.
@@ -50,12 +58,12 @@ Przy dodaniu warstwy odczytywane są metadane i zasięg. Geometrie do mapy są p
 |---|---|
 | Zaznaczenie | Kliknij nazwę warstwy. |
 | Widoczność | Kliknij ☑/☐ lub przycisk Pokaż/ukryj. |
-| Usunięcie z mapy | Usuń lub Delete na liście. Dane w bazie pozostają. |
+| Usunięcie z mapy | Usuń warstwę lub Delete na liście. Dane w bazie pozostają. |
 | Zmiana kolejności | ↑ i ↓; pozycja wyżej na liście jest na wierzchu. |
 | Dopasowanie do jednej warstwy | Przybliż; włącza też widoczność tej warstwy. |
-| Dopasowanie do widocznych | Pokaż wszystkie warstwy. |
+| Dopasowanie do widocznych | Dopasuj widok. |
 | Menu kontekstowe | Prawy przycisk na nazwie warstwy. |
-| Tabela | Zaznacz warstwę i kliknij Tabela danych. |
+| Tabela | Zaznacz warstwę i kliknij Otwórz tabelę danych. |
 
 Ta sama nazwana warstwa z tego samego połączenia nie jest dodawana dwukrotnie. Alias _2180 i alias _3857 mają różne nazwy i mogą zostać dodane osobno, choć przedstawiają tę samą siatkę.
 
@@ -63,7 +71,7 @@ Ta sama nazwana warstwa z tego samego połączenia nie jest dodawana dwukrotnie.
 
 Lewy przycisk przesuwa mapę, kółko i +/− zmieniają zoom. Przy przesuwaniu gotowe kafelki są przemieszczane, a po zakończeniu ruchu doczytywane są brakujące. Status pokazuje zoom, liczbę kafelków i transfer od uruchomienia aplikacji.
 
-Odśwież kafelki usuwa pamięciowy cache, aby mapa pobrała zmienione dane. Należy poczekać na zakończenie bieżących żądań. Zamknięcie aplikacji również usuwa cache.
+Odśwież mapę usuwa pamięciowy cache, aby mapa pobrała zmienione dane. Należy poczekać na zakończenie bieżących żądań. Zamknięcie aplikacji również usuwa cache.
 
 ## Przejezdność i legenda
 
@@ -84,3 +92,4 @@ Tabela jest tylko do odczytu. Nie wdrożono edycji, zapisu projektu, identyfikac
 ## Ograniczenia wydajności
 
 MVT ogranicza transfer, upraszcza i przycina geometrię do skali kafelka. Bardzo małe obiekty mogą zniknąć w oddaleniu. Źródłowa geometria pozostaje w bazie. Włączenie wszystkich 68 warstw nadal może być kosztowne, szczególnie na widoku całego powiatu. Cache nie jest utrwalany na dysku; po ponownym otwarciu pierwsze kafelki są pobierane od nowa.
+
