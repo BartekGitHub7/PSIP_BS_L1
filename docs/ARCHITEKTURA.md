@@ -50,6 +50,10 @@ Sekrety Environment: POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, POSTGRES_POR
 
 | Plik | Rola |
 |---|---|
+| `gui/build_windows.ps1` | Buduje i testuje aplikację Windows przez PyInstaller. |
+| `gui/requirements-build.txt` | Osobne zależności budowania. |
+| `Uruchom_PSIP.cmd` / `Zbuduj_EXE.cmd` | Start i budowanie aplikacji dwuklikiem. |
+| `.github/workflows/build_gui_windows.yml` | Build na windows-latest i publikacja paczki jako artifact. |
 | `gui/main.py` | Interfejs, katalog warstw, zapytania kafelkowe, dekodowanie MVT, rysowanie i tabela danych. |
 | `gui/requirements.txt` | Zależności natywnego GUI: psycopg, mapbox-vector-tile, shapely, matplotlib, Pillow. |
 | `gui/ensure_spatial_indexes.sql` | Dodaje brakujące GiST na geom i wykonuje ANALYZE. |
@@ -85,3 +89,12 @@ Z bazy przychodzą wektorowe dane MVT. Lokalny etap wyświetlania rasteruje je d
 | pan_* / change_zoom / fit_* | Nawigacja mapą. |
 
 Do trzech zadań kafelkowych działa w tle. Wyniki są przekazywane kolejką do głównego wątku Tkinter. Rysowanie Agg ma blokadę, ponieważ Matplotlib nie jest używany równolegle do renderowania. Wynik dla usuniętej warstwy jest odrzucany. Cache jest pamięciowy i znika po zamknięciu GUI.
+
+
+## Pakowanie dla Windows
+
+GUI korzysta z czystego ttk/clam i stylów zdefiniowanych w main.py; ciemny motyw nie wymaga dodatkowego silnika interfejsu. Funkcje apply_dark_theme i application_icon odpowiadają za wygląd i ikonę. Parametr --smoke-test otwiera okno na krótko bez bazy, a --write-icon zapisuje ICO bez uruchamiania GUI.
+
+Build jest osobnym procesem: tworzy .venv-build, instaluje zależności, sprawdza start źródła, generuje ikonę, wywołuje PyInstaller i sprawdza start EXE. Domyślny wynik to folder z EXE oraz bibliotekami _internal. Opcja -OneFile tworzy pojedynczy EXE. Kod źródłowy i SQL pozostają osobnymi plikami repozytorium; skrypty SQL nie są wykonywane przez EXE.
+
+Workflow Build Windows GUI działa na runnerze GitHub Windows, bez sekretów bazy i bez Dockera. To inny runner niż lokalny self-hosted używany do uruchamiania PostGIS. Artifact jest przechowywany przez 14 dni.
