@@ -2,6 +2,9 @@
 Siatki: id + geom + przejezdnosc. BDOT: id + geom. Bez serwera HTTP i bez pobierania całych warstw.
 """
 import math
+import argparse
+import sys
+from pathlib import Path as FilePath
 import queue
 import re
 import threading
@@ -13,7 +16,7 @@ from tkinter import ttk, messagebox
 import psycopg
 from psycopg import sql
 import mapbox_vector_tile
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 from shapely.geometry import shape
 from shapely.geometry.polygon import orient
 from matplotlib.figure import Figure
@@ -32,6 +35,92 @@ CACHE_LIMIT = 192  # około 48 MiB obrazów RGBA
 NO_DATA_COLOR = "#bdbdbd"
 RAMP = ("#d73027", "#fee08b", "#1a9850")
 RENDER_LOCK = threading.Lock()  # Matplotlib nie jest bezpieczny wielowątkowo
+
+
+THEME = dict(bg="#0b1120", panel="#111c2e", surface="#19283e",
+             hover="#243952", border="#2a3b52", text="#e6edf7",
+             muted="#94a3b8", accent="#38bdf8", map="#0f172a")
+
+
+def application_icon():
+    """Ikona generowana z geometrii, bez zewnętrznych zasobów."""
+    image = Image.new("RGBA",(256,256),(0,0,0,0))
+    draw = ImageDraw.Draw(image)
+    draw.rounded_rectangle((4,4,252,252),radius=54,fill=THEME["bg"])
+    for cx,cy,color in [(87,88,"#164e63"),(163,88,"#0c4a6e"),(125,155,"#0891b2")]:
+        points=[(cx+47*math.cos(math.radians(a)),cy+47*math.sin(math.radians(a)))
+                for a in (30,90,150,210,270,330)]
+        draw.polygon(points,fill=color)
+        draw.line(points+[points[0]],fill=THEME["accent"],width=5,joint="curve")
+    return image
+
+
+def apply_dark_theme(root):
+    root.configure(background=THEME["bg"])
+    root.option_add("*Font", "{Segoe UI} 10")
+    root.option_add("*Menu.background",THEME["panel"])
+    root.option_add("*Menu.foreground",THEME["text"])
+    root.option_add("*Menu.activeBackground",THEME["surface"])
+    root.option_add("*Menu.activeForeground",THEME["accent"])
+    root.option_add("*Menu.borderWidth",0)
+    style = ttk.Style(root)
+    style.theme_use("clam")
+    style.configure(".",background=THEME["panel"],foreground=THEME["text"],
+                    font=("Segoe UI",10),bordercolor=THEME["border"],
+                    lightcolor=THEME["border"],darkcolor=THEME["border"])
+    style.configure("TFrame",background=THEME["panel"])
+    style.configure("Header.TFrame",background=THEME["bg"])
+    style.configure("TLabel",background=THEME["panel"],foreground=THEME["text"])
+    style.configure("Muted.TLabel",foreground=THEME["muted"])
+    style.configure("Brand.TLabel",background=THEME["bg"],font=("Segoe UI",22,"bold"))
+    style.configure("BrandSub.TLabel",background=THEME["bg"],foreground=THEME["muted"],font=("Segoe UI",10))
+    style.configure("Badge.TLabel",background=THEME["surface"],foreground=THEME["accent"],padding=(12,6),font=("Segoe UI",9,"bold"))
+    style.configure("Title.TLabel",font=("Segoe UI",11,"bold"))
+    style.configure("TButton",padding=(12,9),background=THEME["surface"],
+                    foreground=THEME["text"],borderwidth=0,focusthickness=1,
+                    focuscolor=THEME["accent"],font=("Segoe UI",10))
+    style.map("TButton",background=[("disabled",THEME["panel"]),("pressed",THEME["border"]),("active",THEME["hover"])],
+              foreground=[("disabled","#66758b")])
+    style.configure("Primary.TButton",background=THEME["accent"],foreground=THEME["bg"],font=("Segoe UI",10,"bold"))
+    style.map("Primary.TButton",background=[("disabled",THEME["surface"]),("pressed","#0284c7"),("active","#7dd3fc")],
+              foreground=[("disabled",THEME["muted"]),("!disabled",THEME["bg"])])
+    style.configure("Danger.TButton",foreground="#fda4af")
+    style.map("Danger.TButton",background=[("active","#4c2435")])
+    style.configure("TEntry",fieldbackground=THEME["bg"],foreground=THEME["text"],
+                    insertcolor=THEME["accent"],padding=7,borderwidth=1)
+    style.map("TEntry",bordercolor=[("focus",THEME["accent"])])
+    style.configure("Treeview",background=THEME["bg"],fieldbackground=THEME["bg"],
+                    foreground=THEME["text"],rowheight=32,borderwidth=0)
+    style.map("Treeview",background=[("selected","#164e63")],foreground=[("selected","#f0f9ff")])
+    style.configure("Treeview.Heading",background=THEME["surface"],foreground=THEME["muted"],
+                    padding=(8,9),font=("Segoe UI",9,"bold"),relief="flat")
+    style.map("Treeview.Heading",background=[("active",THEME["hover"])])
+    style.configure("TScrollbar",background=THEME["surface"],troughcolor=THEME["bg"],
+                    arrowcolor=THEME["muted"],borderwidth=0)
+    style.configure("TPanedwindow",background=THEME["border"])
+    style.configure("TLabelframe",background=THEME["panel"],bordercolor=THEME["border"],borderwidth=1)
+    style.configure("TLabelframe.Label",background=THEME["panel"],foreground=THEME["muted"],font=("Segoe UI",9,"bold"))
+    style.configure("Status.TLabel",background=THEME["bg"],foreground=THEME["muted"],padding=(14,8),font=("Segoe UI",9))
+    root._app_icon = ImageTk.PhotoImage(application_icon(),master=root)
+    root.iconphoto(True,root._app_icon)
+    if sys.platform == "win32":
+        root.after(100,lambda:dark_titlebar(root))
+
+
+def dark_titlebar(window):
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        hwnd = ctypes.windll.user32.GetParent(window.winfo_id())
+        enabled = ctypes.c_int(1)
+        for attribute in (20,19):
+            result = ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd,attribute,ctypes.byref(enabled),ctypes.sizeof(enabled))
+            if result == 0:
+                break
+    except (AttributeError,OSError):
+        pass
 
 
 def passability_color(value):
@@ -182,13 +271,13 @@ def paint_tile(features, color, thematic=False):
         ax.set_ylim(0,EXTENT)
         if polygons:
             ax.add_collection(PathCollection(polygons, facecolors=polygon_colors,
-                edgecolors="#424242", linewidths=0.35, antialiaseds=False), autolim=False)
+                edgecolors="#64748b", linewidths=0.35, antialiaseds=False), autolim=False)
         if lines:
             ax.add_collection(LineCollection(lines, colors=line_colors,
                 linewidths=0.85, antialiaseds=False), autolim=False)
         if points:
             ax.scatter([p[0] for p in points], [p[1] for p in points],
-                       s=8, c=point_colors, edgecolors="#424242", linewidths=0.3)
+                       s=8, c=point_colors, edgecolors="#64748b", linewidths=0.3)
         ax.set_xlim(0,EXTENT)
         ax.set_ylim(0,EXTENT)
         canvas = FigureCanvasAgg(fig)
@@ -202,9 +291,10 @@ def paint_tile(features, color, thematic=False):
 class GISApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("PSIP — przejezdność terenu / PostGIS MVT")
-        self.geometry("1250x800")
-        self.minsize(900,600)
+        apply_dark_theme(self)
+        self.title("PSIP Map — analiza terenu")
+        self.geometry("1360x860")
+        self.minsize(1080,700)
         self.layers = []
         self.last_settings = {}
         self.events = queue.Queue()
@@ -227,22 +317,27 @@ class GISApp(tk.Tk):
         self.bytes_received = 0
         self.status = tk.StringVar(value="Gotowe | MVT | mapa EPSG:3857")
         self.protocol("WM_DELETE_WINDOW", self.close_app)
-        toolbar = ttk.Frame(self,padding=6)
-        toolbar.pack(fill="x")
-        self.add_button = ttk.Button(toolbar,text="Dodaj dane z PostGIS",command=self.open_database)
+        header = ttk.Frame(self,style="Header.TFrame",padding=(20,14))
+        header.pack(fill="x")
+        ttk.Label(header,text="PSIP MAP",style="Brand.TLabel").pack(side="left")
+        ttk.Label(header,text="Analiza terenu  /  powiat radomszczański",style="BrandSub.TLabel").pack(side="left",padx=20)
+        ttk.Label(header,text="POSTGIS  ·  MVT",style="Badge.TLabel").pack(side="right")
+        toolbar = ttk.Frame(self,padding=(16,10))
+        toolbar.pack(fill="x",pady=(0,1))
+        self.add_button = ttk.Button(toolbar,text="＋  Dodaj dane",style="Primary.TButton",command=self.open_database)
         self.add_button.pack(side="left")
-        ttk.Button(toolbar,text="Pokaż wszystkie warstwy",command=self.fit_layers).pack(side="left",padx=8)
-        ttk.Button(toolbar,text="+",command=lambda:self.change_zoom(1)).pack(side="left")
-        ttk.Button(toolbar,text="−",command=lambda:self.change_zoom(-1)).pack(side="left",padx=4)
-        ttk.Button(toolbar,text="Odśwież kafelki",command=self.clear_cache).pack(side="left",padx=8)
-        ttk.Label(toolbar,text="Przesuwanie: lewy przycisk | zoom: kółko myszy").pack(side="left",padx=8)
+        ttk.Button(toolbar,text="Dopasuj widok",command=self.fit_layers).pack(side="left",padx=(10,4))
+        ttk.Button(toolbar,text="Odśwież mapę",command=self.clear_cache).pack(side="left",padx=4)
+        ttk.Button(toolbar,text="＋",width=3,command=lambda:self.change_zoom(1)).pack(side="left",padx=(16,4))
+        ttk.Button(toolbar,text="−",width=3,command=lambda:self.change_zoom(-1)).pack(side="left")
+        ttk.Label(toolbar,text="Przesuwanie: lewy przycisk   ·   Zoom: kółko",style="Muted.TLabel").pack(side="right",padx=8)
         layout = ttk.Panedwindow(self,orient="horizontal")
         layout.pack(fill="both",expand=True)
-        sidebar = ttk.Frame(layout,padding=8,width=250)
+        sidebar = ttk.Frame(layout,padding=(14,14),width=320)
         layout.add(sidebar,weight=0)
-        ttk.Label(sidebar,text="WARSTWY",font=("Segoe UI",11,"bold")).pack(anchor="w")
+        ttk.Label(sidebar,text="WARSTWY",style="Title.TLabel").pack(anchor="w")
         ttk.Label(sidebar,text="Kliknij warstwę, aby ją wybrać.\n☑/☐ przełącza widoczność. Górna warstwa\njest rysowana na wierzchu.",
-                  wraplength=270).pack(anchor="w",pady=8)
+                  wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,12))
         layer_box = ttk.Frame(sidebar)
         layer_box.pack(fill="both",expand=True)
         self.layer_tree = ttk.Treeview(layer_box,columns=("show","name"),show="headings",
@@ -250,7 +345,7 @@ class GISApp(tk.Tk):
         self.layer_tree.heading("show",text="✓")
         self.layer_tree.heading("name",text="Warstwa")
         self.layer_tree.column("show",width=35,stretch=False,anchor="center")
-        self.layer_tree.column("name",width=235)
+        self.layer_tree.column("name",width=255)
         scroll = ttk.Scrollbar(layer_box,orient="vertical",command=self.layer_tree.yview)
         self.layer_tree.configure(yscrollcommand=scroll.set)
         self.layer_tree.pack(side="left",fill="both",expand=True)
@@ -260,30 +355,38 @@ class GISApp(tk.Tk):
         self.layer_tree.bind("<Delete>",lambda e:self.remove_selected())
         self.layer_tree.bind("<Button-3>",self.layer_menu)
         controls = ttk.Frame(sidebar)
-        controls.pack(fill="x",pady=8)
-        ttk.Button(controls,text="Usuń",command=self.remove_selected).grid(row=0,column=0,padx=2,pady=2)
-        ttk.Button(controls,text="↑",command=lambda:self.move_selected(1)).grid(row=0,column=1,padx=2)
-        ttk.Button(controls,text="↓",command=lambda:self.move_selected(-1)).grid(row=0,column=2,padx=2)
-        ttk.Button(controls,text="Pokaż/ukryj",command=self.toggle_selected).grid(row=1,column=0,padx=2,pady=2)
-        ttk.Button(controls,text="Przybliż",command=self.fit_selected).grid(row=1,column=1,columnspan=2,padx=2)
-        ttk.Button(sidebar,text="Tabela danych",command=self.show_attributes).pack(fill="x")
+        controls.pack(fill="x",pady=(12,6))
+        controls.columnconfigure(0,weight=1)
+        controls.columnconfigure(1,weight=1)
+        ttk.Button(controls,text="↑  Wyżej",command=lambda:self.move_selected(1)).grid(row=0,column=0,sticky="ew",padx=(0,3),pady=3)
+        ttk.Button(controls,text="↓  Niżej",command=lambda:self.move_selected(-1)).grid(row=0,column=1,sticky="ew",padx=(3,0),pady=3)
+        ttk.Button(controls,text="Pokaż / ukryj",command=self.toggle_selected).grid(row=1,column=0,sticky="ew",padx=(0,3),pady=3)
+        ttk.Button(controls,text="Przybliż",command=self.fit_selected).grid(row=1,column=1,sticky="ew",padx=(3,0),pady=3)
+        ttk.Button(controls,text="Usuń warstwę",style="Danger.TButton",command=self.remove_selected).grid(row=2,column=0,columnspan=2,sticky="ew",pady=(3,0))
+        ttk.Button(sidebar,text="Otwórz tabelę danych",command=self.show_attributes).pack(fill="x",pady=(0,4))
         self.layer_info = tk.StringVar(value="Wybierz siatkę H3, aby zobaczyć przejezdność.")
-        ttk.Label(sidebar,textvariable=self.layer_info,wraplength=275).pack(anchor="w",pady=8)
-        legend = ttk.LabelFrame(sidebar,text="Przejezdność — skala 0–1",padding=6)
+        ttk.Label(sidebar,textvariable=self.layer_info,wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=8)
+        legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · SKALA ROBOCZA",padding=12)
         legend.pack(fill="x",pady=6)
-        bar = tk.Canvas(legend,width=240,height=16,highlightthickness=0)
+        bar = tk.Canvas(legend,width=240,height=16,bg=THEME["panel"],highlightthickness=0)
         bar.pack(fill="x")
         for x in range(240):
             bar.create_line(x,0,x,16,fill=passability_color(x/239))
         ttk.Label(legend,text="0 — nieprzejezdne          1 — przejezdne").pack(anchor="w")
         empty = ttk.Frame(legend)
         empty.pack(anchor="w",pady=(6,0))
-        tk.Label(empty,bg=NO_DATA_COLOR,width=3).pack(side="left",padx=(0,5))
+        tk.Label(empty,bg=NO_DATA_COLOR,width=3,relief="flat").pack(side="left",padx=(0,5))
         ttk.Label(empty,text="Brak danych (NULL)").pack(side="left")
         ttk.Label(legend,text="Kolory komórek, nie gęstość punktów.\nWartości musi dostarczyć analiza.",
-                  wraplength=265).pack(anchor="w",pady=(6,0))
-        self.map = tk.Canvas(layout,bg="#f3f3f3",highlightthickness=0)
-        layout.add(self.map,weight=1)
+                  wraplength=265,style="Muted.TLabel").pack(anchor="w",pady=(6,0))
+        map_panel = ttk.Frame(layout)
+        layout.add(map_panel,weight=1)
+        map_heading = ttk.Frame(map_panel,padding=(14,10))
+        map_heading.pack(fill="x")
+        ttk.Label(map_heading,text="MAPA",style="Title.TLabel").pack(side="left")
+        ttk.Label(map_heading,text="EPSG:3857",style="Muted.TLabel").pack(side="right")
+        self.map = tk.Canvas(map_panel,bg=THEME["map"],highlightthickness=0)
+        self.map.pack(fill="both",expand=True)
         self.map.bind("<Configure>",lambda e:self.schedule_draw())
         self.map.bind("<ButtonPress-1>",self.pan_start)
         self.map.bind("<B1-Motion>",self.pan_move)
@@ -291,7 +394,8 @@ class GISApp(tk.Tk):
         self.map.bind("<MouseWheel>",self.wheel)
         self.map.bind("<Button-4>",lambda e:self.change_zoom(1,e.x,e.y))
         self.map.bind("<Button-5>",lambda e:self.change_zoom(-1,e.x,e.y))
-        ttk.Label(self,textvariable=self.status,relief="sunken",padding=4).pack(fill="x")
+        ttk.Label(self,textvariable=self.status,style="Status.TLabel").pack(fill="x")
+        self.schedule_draw()
         self.after(100,self.process_events)
         self.after(50,self.process_tiles)
 
@@ -333,8 +437,11 @@ class GISApp(tk.Tk):
 
     def open_database(self):
         dialog = tk.Toplevel(self)
+        dialog.configure(background=THEME["panel"])
+        dialog.after(100,lambda:dark_titlebar(dialog))
         dialog.title("Dodaj dane z PostgreSQL / PostGIS")
-        dialog.geometry("780x550")
+        dialog.geometry("840x640")
+        dialog.minsize(760,580)
         dialog.transient(self)
         dialog.grab_set()
 
@@ -473,7 +580,7 @@ class GISApp(tk.Tk):
         ).pack(side="left")
 
         ttk.Button(
-            buttons, text="Dodaj zaznaczone", command=add_selected
+            buttons, text="Dodaj zaznaczone", style="Primary.TButton", command=add_selected
         ).pack(side="right")
 
     def add_layer(self, layer):
@@ -604,6 +711,8 @@ class GISApp(tk.Tk):
         if not layer:
             return
         dialog = tk.Toplevel(self)
+        dialog.configure(background=THEME["panel"])
+        dialog.after(100,lambda:dark_titlebar(dialog))
         dialog.title("Tabela — "+layer["name"])
         dialog.geometry("1000x470")
         columns = ("id","geom","przejezdnosc") if layer.get("is_grid") else ("id","geom")
@@ -691,6 +800,13 @@ class GISApp(tk.Tk):
         wanted = []
         self.visible_keys = set()
         self.map.delete("tile")
+        self.map.delete("empty")
+        if not any(layer["visible"].get() for layer in self.layers):
+            cx,cy = self.map.winfo_width()/2,self.map.winfo_height()/2
+            title = "Dodaj pierwszą warstwę" if not self.layers else "Warstwy są ukryte"
+            subtitle = "Kliknij ＋ Dodaj dane i wybierz siatkę H3 lub BDOT z PostGIS." if not self.layers else "Włącz widoczność wybranej warstwy w panelu po lewej."
+            self.map.create_text(cx,cy-16,text=title,fill=THEME["text"],font=("Segoe UI",20,"bold"),tags="empty")
+            self.map.create_text(cx,cy+24,text=subtitle,fill=THEME["muted"],font=("Segoe UI",10),width=max(200,self.map.winfo_width()-80),tags="empty")
         self.photos.clear()
         cached = 0
         for layer in self.layers:
@@ -819,5 +935,27 @@ class GISApp(tk.Tk):
         self.destroy()
 
 
+def main():
+    parser = argparse.ArgumentParser(description="PSIP Map — przeglądarka PostGIS")
+    parser.add_argument("--write-icon",metavar="PATH",help="Zapisz ikonę ICO bez otwierania GUI")
+    parser.add_argument("--smoke-test",action="store_true",help="Sprawdź inicjalizację okna bez połączenia z bazą")
+    args = parser.parse_args()
+    if args.write_icon:
+        target = FilePath(args.write_icon)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        application_icon().save(target,format="ICO",sizes=[(16,16),(32,32),(48,48),(64,64),(128,128),(256,256)])
+        return
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+        except (AttributeError,OSError):
+            pass
+    app = GISApp()
+    if args.smoke_test:
+        app.after(600,app.close_app)
+    app.mainloop()
+
+
 if __name__ == "__main__":
-    GISApp().mainloop()
+    main()
