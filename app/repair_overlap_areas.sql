@@ -79,11 +79,17 @@ BEGIN
             'CREATE TEMP TABLE clipped_cells ON COMMIT DROP AS
              SELECT g.h3_id,
                     ST_CollectionExtract(
-                        ST_Intersection(g.geom, $1), 3
+                        ST_Intersection(g.geom, p.geom), 3
                     ) AS geom
-             FROM grid.%I g',
+             FROM grid.%I g
+             CROSS JOIN (
+                 SELECT ST_UnaryUnion(
+                     ST_Collect(ST_MakeValid(geom))
+                 ) AS geom
+                 FROM public.powiat
+             ) p',
             grid_name
-        ) USING powiat_geom;
+        );
 
         CREATE INDEX ON clipped_cells USING gist (geom);
         CREATE INDEX ON clipped_cells (h3_id);
