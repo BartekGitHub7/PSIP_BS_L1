@@ -103,7 +103,9 @@ BEGIN
             RAISE NOTICE 'grid.%, %: H3=%, BDOT=%, roznica=% m',
                 grid_name,target_col,observed_total,expected_total,diff;
 
-            IF NOT isfinite(diff) OR abs(diff)>0.1 THEN
+            IF diff IS NULL
+               OR diff::text IN ('NaN','Infinity','-Infinity')
+               OR abs(diff)>0.1 THEN
                 RAISE EXCEPTION
                   'Walidacja nieudana: grid.%, %, roznica % m. ROLLBACK.',
                   grid_name,target_col,diff;
