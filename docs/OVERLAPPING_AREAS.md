@@ -18,6 +18,7 @@ Wyniki dla `ot_adja_a` byly czesto 4 razy wieksze od powierzchni komorki. Skrypt
 - `app/aggregate_bdot.sql`: dla `ot_adja_a` i `ot_adms_a` obliczana jest powierzchnia **unii** czesci poligonow przecietych z komorka (`ST_Area(ST_UnaryUnion(ST_Collect(...)))`). Inne warstwy nadal zachowuja dotychczasowa semantyke, bez niespodziewanej zmiany metryk.
 - `app/repair_overlap_areas.sql`: jednorazowa naprawa **istniejacych** wartosci tych dwoch kolumn w trzech siatkach. Przed zmianami zapisuje ich stare wartosci w `audit.bdot_overlap_area_backup`, bez nadpisywania wczesniejszego backupu. Uzywa jednej transakcji i wykonuje kontrole zakresu; blad oznacza rollback.
 - `app/verify_overlap_areas.sql`: odczytowy raport z liczba naruszen i maksymalnym udzialem powierzchni dla trzech siatek.
+- `app/rollback_overlap_areas.sql`: opcjonalne przywrocenie oryginalnych wartosci dwoch kolumn z tabeli audytowej.
 
 **Nie nalezy ponownie importowac siatek przez `load.py`**: ten skrypt odtwarza tabele H3 i usuwa juz zgromadzone agregaty.
 
@@ -35,6 +36,16 @@ Get-Content -Raw .\app\verify_overlap_areas.sql | docker exec -i remote-db-env-t
 Oczekiwany wynik w raporcie to `bledne_adja = 0` i `bledne_adms = 0` we wszystkich trzech wierszach. Przy pelnych komorkach i prawidlowych danych `max_udzial_*` nie powinien przekraczac 1. Jesli raport lub naprawa zglosza blad, zachowaj komunikat do dalszej diagnozy.
 
 Przy ponownym uruchomieniu `repair_overlap_areas.sql` tabela backup nie jest nadpisywana: zachowuje pierwsza zarejestrowana wartosc dla kazdego `(grid_name, h3_id)`.
+
+## Przywrocenie danych (tylko w razie potrzeby)
+
+Jesli naprawe trzeba cofnac, w tej samej bazie i na tej samej galezi wykonaj:
+
+```powershell
+Get-Content -Raw .\app\rollback_overlap_areas.sql | docker exec -i remote-db-env-test-postgis-1 psql -U psip -d psip -v ON_ERROR_STOP=1
+```
+
+To przywraca tylko `ot_adja_a_area_m2` i `ot_adms_a_area_m2` dla komorek, ktorych kopia jest w `audit.bdot_overlap_area_backup`; nie usuwa backupu.
 
 ## Przykladowy test semantyki, bez modyfikacji danych
 
