@@ -18,12 +18,12 @@ Przed zapisem sprawdzono listę zdalnych branchy: env-test, env-qa, main; nie by
 
 ## Wersja GUI opisana w dokumentacji
 
-Źródło: gui/main.py z aktualnej paczki **PSIP_Tkinter_MVT.zip** po dodaniu obsługi przejezdności i sterowania warstwami, przed zmianą prezentacji na dwie klasy.
+Źródło: gui/main.py na branchu **feature/gui-tkinter**, po dodaniu ciemnego motywu i obsługi pakowania Windows, przed zmianą prezentacji na dwie klasy. Wcześniejsza paczka PSIP_Tkinter_MVT.zip nie zawiera tej aktualizacji wyglądu.
 
-SHA-256 pliku main.py:
+SHA-256 aktualnego pliku main.py po zmianie wyglądu:
 
 ```text
-5e310cd5528b4ae9c92ab8f3fa976dd11ce284467355cd4a8878c7d96ee3908c
+d630b07f92a19b6c09dea63930c52f8ee40c747c0dc40bd1621fb95d8bcce0e8
 ```
 
 To identyfikator zawartości dostarczonego pliku. Zapisano go również zdalnie na feature/gui-tkinter. Lokalny plik użytkownika może różnić się, jeśli wprowadzono własne zmiany. Użytkownik potwierdził działanie aktualnej wersji, ale nie przekazał pełnego odczytu wszystkich danych bazy po migracji.
@@ -55,3 +55,10 @@ check_test.sql jest zbiorem zapytań tylko do odczytu. backup_test.ps1 wykonuje 
 ## Aktualizowanie dokumentacji
 
 Po istotnej zmianie kodu uaktualnij datę, STATUS.md i opis właściwego modułu. Po zdefiniowaniu modelu dodaj osobny dokument metody z kryteriami, wzorami, wagami, źródłami i walidacją. Nie zmieniaj wcześniejszych propozycji na „zatwierdzone” bez rzeczywistej decyzji.
+
+
+## Sprawdzenie wersji Windows
+
+[GitHub Actions — build 40493262781](https://github.com/BartekGitHub7/PSIP_BS_L1/actions/runs/40493262781) wykonał instalację zależności, otwarcie okna kodu źródłowego, build PyInstaller i otwarcie okna EXE bez łączenia z bazą. Test EXE ma limit 60 sekund i weryfikuje kod zakończenia. Nie testuje dostępności lokalnego PostGIS użytkownika. Testy renderowania i logiki warstw przeszły ponownie po zmianie motywu. Nie przeprowadzono manualnego przeglądu wyglądu okna na komputerze użytkownika.
+
+Dokumentacja narzędzia pakującego: https://pyinstaller.org/en/stable/usage.html oraz https://pyinstaller.org/en/stable/operating-mode.html.
