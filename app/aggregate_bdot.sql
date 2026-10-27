@@ -58,9 +58,16 @@ BEGIN
 
             ELSIF right(layer_record.table_name, 2) = '_l' THEN
                 column_name := layer_record.table_name || '_length_m';
+                -- Intersect moze zwrocic EMPTY takze dla calej linii
+                -- wewnatrz komorki. Wtedy bierzemy dlugosc oryginalu.
                 measure_sql :=
-                    'SUM(ST_Length(ST_CollectionExtract(
-                        ST_Intersection(c.geom, b.geom), 2)))';
+                    'SUM(CASE
+                        WHEN ST_Covers(c.geom, b.geom)
+                            THEN ST_Length(b.geom)
+                        ELSE ST_Length(ST_CollectionExtract(
+                            ST_Intersection(c.geom, b.geom), 2
+                        ))
+                    END)';
 
             ELSE
                 column_name := layer_record.table_name || '_count';
