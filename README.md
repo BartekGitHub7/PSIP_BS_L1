@@ -1,5 +1,11 @@
 # PSIP\_BS\_L1
 
+## Aktualna dokumentacja i aplikacja GUI
+
+[Dokumentacja projektu — zacznij tutaj](docs/README.md) | [Stan prac](docs/STATUS.md) | [Obsługa GUI](docs/GUI.md)
+
+Na branchu `feature/gui-tkinter` znajduje się przeglądarka Tkinter z kafelkami wektorowymi MVT, obsługą warstw oraz polem `przejezdnosc`. Kryteria analizy wielokryterialnej nie zostały jeszcze ustalone. Docelowo wynik ma dwie klasy (0/1); bieżące GUI zachowuje roboczą skalę 0–1 i szary kolor dla brakujących wyników. Szczegóły i ograniczenia opisano w dokumentacji.
+
 laboratorium 1
 - Stanisław - turecki
 * Bartek - radomszczański

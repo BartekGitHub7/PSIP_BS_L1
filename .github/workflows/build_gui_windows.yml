@@ -1,0 +1,42 @@
+name: Build Windows GUI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/gui-tkinter
+    paths:
+      - 'gui/**'
+      - 'Uruchom_PSIP.cmd'
+      - 'Zbuduj_EXE.cmd'
+      - '.github/workflows/build_gui_windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build and smoke-test Windows application
+        shell: pwsh
+        run: ./gui/build_windows.ps1 -PythonExecutable (Get-Command python).Source
+      - name: Record resolved build dependencies
+        shell: pwsh
+        run: |
+          ./.venv-build/Scripts/python.exe -m pip freeze | Out-File -FilePath ./dist/PSIP_Mapa/build-dependencies.txt -Encoding utf8
+          Copy-Item ./docs/GUI.md ./dist/PSIP_Mapa/GUI.md
+      - name: Upload application
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSIP_Mapa_Windows
+          path: dist/PSIP_Mapa/
+          if-no-files-found: error
+          retention-days: 14
