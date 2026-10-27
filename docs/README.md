@@ -14,6 +14,7 @@ Projekt obejmuje przygotowanie danych przestrzennych w PostGIS, siatki H3 z agre
 | [STATUS.md](STATUS.md) | Co wykonano, co potwierdzono, a co pozostaje do zrobienia. |
 | [ARCHITEKTURA.md](ARCHITEKTURA.md) | Przepływ danych i odpowiedzialność poszczególnych plików. |
 | [BAZA_DANYCH.md](BAZA_DANYCH.md) | Schematy, układy współrzędnych, H3, agregacje, indeksy i przejezdność. |
+| [WINDOWS_EXE.md](WINDOWS_EXE.md) | Gotowa aplikacja Windows, dwuklik i samodzielny build. |
 | [GUI.md](GUI.md) | Uruchomienie, obsługa, trzy pola siatki i sposób działania MVT. |
 | [UTRZYMANIE.md](UTRZYMANIE.md) | Kontrola działania, zapis w Git, kopia bazy i rozwiązywanie problemów. |
 | [ZRODLA_I_WERYFIKACJA.md](ZRODLA_I_WERYFIKACJA.md) | Podstawa opisu, wersje źródeł i zakres wykonanych sprawdzeń. |
@@ -42,3 +43,4 @@ Projekt obejmuje przygotowanie danych przestrzennych w PostGIS, siatki H3 z agre
 GUI rozwijamy lokalnie na **feature/gui-tkinter**. Branch funkcjonalny nie jest dodatkowym środowiskiem bazy. GUI łączy się z env-test na 5444.
 
 Słowo „remote” w nazwach nie oznacza obecnie serwera w chmurze: runner i Docker działają na komputerze użytkownika. Każde środowisko ma odrębny wolumen i odrębne dane.
+
