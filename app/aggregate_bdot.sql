@@ -41,15 +41,26 @@ BEGIN
         LOOP
             IF right(layer_record.table_name, 2) = '_a' THEN
                 column_name := layer_record.table_name || '_area_m2';
-                measure_sql :=
-                    'ST_Area(ST_CollectionExtract(
-                        ST_Intersection(c.geom, b.geom), 3))';
+                -- W tych warstwach poligony moga nakladac sie na siebie.
+                -- Ich zwykla suma przekracza powierzchnie pojedynczej komorki.
+                IF layer_record.table_name IN ('ot_adja_a', 'ot_adms_a') THEN
+                    measure_sql :=
+                        'ST_Area(ST_UnaryUnion(ST_Collect(
+                            ST_CollectionExtract(
+                                ST_Intersection(c.geom, b.geom), 3
+                            )
+                        )))';
+                ELSE
+                    measure_sql :=
+                        'SUM(ST_Area(ST_CollectionExtract(
+                            ST_Intersection(c.geom, b.geom), 3)))';
+                END IF;
 
             ELSIF right(layer_record.table_name, 2) = '_l' THEN
                 column_name := layer_record.table_name || '_length_m';
                 measure_sql :=
-                    'ST_Length(ST_CollectionExtract(
-                        ST_Intersection(c.geom, b.geom), 2))';
+                    'SUM(ST_Length(ST_CollectionExtract(
+                        ST_Intersection(c.geom, b.geom), 2)))';
 
             ELSE
                 column_name := layer_record.table_name || '_count';
@@ -94,7 +105,7 @@ BEGIN
                 EXECUTE format(
                     'UPDATE grid.%I g
                      SET %I = COALESCE((
-                         SELECT sum(%s)
+                         SELECT %s
                          FROM clipped_cells c
                          JOIN bdot.%I b
                            ON ST_Intersects(c.geom, b.geom)
