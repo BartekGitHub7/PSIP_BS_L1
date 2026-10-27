@@ -100,10 +100,19 @@ BEGIN
         ELSIF right(source_layer.table_name,2) = '_l' THEN
             target_col := source_layer.table_name || '_length_m';
             metric_type := 'dlugosc';
+            -- Dla linii w calosci zawartych w powiecie uzywamy
+            -- oryginalnej dlugosci. Na 8 poprawnych geometriach
+            -- ST_Within = TRUE, ale ST_Intersection zwracal EMPTY,
+            -- sztucznie zanizajac wartosc kontrolna.
             EXECUTE format(
-                'SELECT COALESCE(SUM(ST_Length(ST_CollectionExtract(
-                     ST_Intersection(b.geom,$1),2
-                 ))),0)
+                'SELECT COALESCE(SUM(
+                     CASE WHEN ST_Covers($1,b.geom)
+                          THEN ST_Length(b.geom)
+                          ELSE ST_Length(ST_CollectionExtract(
+                              ST_Intersection(b.geom,$1),2
+                          ))
+                     END
+                 ),0)
                  FROM bdot.%I b
                  WHERE ST_Intersects(b.geom,$1)',
                 source_layer.table_name
