@@ -20,7 +20,7 @@ DO $$
 DECLARE
     grid_name text;
     source_name text;
-    column_name text;
+    target_col text;
     powiat_geom geometry;
     rows_changed bigint;
     bad_rows bigint;
@@ -35,17 +35,17 @@ BEGIN
 
         FOREACH source_name IN ARRAY ARRAY['ot_adja_a', 'ot_adms_a']
         LOOP
-            column_name := source_name || '_area_m2';
+            target_col := source_name || '_area_m2';
             IF to_regclass(format('bdot.%I', source_name)) IS NULL THEN
                 RAISE EXCEPTION 'Brak tabeli bdot.%', source_name;
             END IF;
             IF NOT EXISTS (
-                SELECT 1 FROM information_schema.columns
+                SELECT 1 FROM information_schema.columns AS c
                 WHERE table_schema = 'grid'
                   AND table_name = grid_name
-                  AND column_name = column_name
+                  AND c.column_name = target_col
             ) THEN
-                RAISE EXCEPTION 'Brak kolumny grid.%.%', grid_name, column_name;
+                RAISE EXCEPTION 'Brak kolumny grid.%.%', grid_name, target_col;
             END IF;
         END LOOP;
     END LOOP;
@@ -91,7 +91,7 @@ BEGIN
 
         FOREACH source_name IN ARRAY ARRAY['ot_adja_a', 'ot_adms_a']
         LOOP
-            column_name := source_name || '_area_m2';
+            target_col := source_name || '_area_m2';
 
             -- ST_Collect + ST_UnaryUnion usuwa wielokrotne pokrycie
             -- wewnatrz JEDNEJ warstwy. Nie laczymy roznych warstw BDOT.
@@ -108,7 +108,7 @@ BEGIN
                        ON ST_Intersects(c.geom, b.geom)
                      WHERE c.h3_id = g.h3_id
                  ), 0)',
-                grid_name, column_name, source_name
+                grid_name, target_col, source_name
             );
             GET DIAGNOSTICS rows_changed = ROW_COUNT;
 
@@ -124,17 +124,17 @@ BEGIN
                             ST_Intersection(g.geom, $1), 3
                         )
                     ) + 0.01',
-                grid_name, column_name, column_name, column_name
+                grid_name, target_col, target_col, target_col
             ) INTO bad_rows USING powiat_geom;
 
             IF bad_rows > 0 THEN
                 RAISE EXCEPTION
                     'Walidacja NIEPOWODZENIE: grid.%, kolumna %, % blednych wierszy. Transakcja wycofana.',
-                    grid_name, column_name, bad_rows;
+                    grid_name, target_col, bad_rows;
             END IF;
 
             RAISE NOTICE 'OK: grid.%, %: % wierszy zaktualizowano, 0 przekroczen',
-                grid_name, column_name, rows_changed;
+                grid_name, target_col, rows_changed;
         END LOOP;
     END LOOP;
 END
