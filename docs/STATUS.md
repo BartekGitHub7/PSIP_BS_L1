@@ -16,6 +16,8 @@ Data: 27.10.2026. Ten dokument oddziela stan wykonany od planów. Nie jest dekla
 | Widoki 2180/3857 | Utworzone i sprawdzone w env-test | geometry_columns: 9 pozycji z odpowiednimi SRID. |
 | GUI Tkinter | Uruchomione przez użytkownika | Potwierdzenie działania. |
 | Przejście na MVT | Zaimplementowane | Kod aktualnej paczki i testy lokalne. |
+| Ciemny motyw, ikona i pasek narzędzi | Zaimplementowane | Kod zapisany na feature/gui-tkinter. |
+| Paczka EXE dla Windows | Build oraz test uruchomienia źródła i EXE przeszły | GitHub Actions Build Windows GUI, run 40493262781; bez połączenia z bazą. |
 | Trzy pola siatki i sterowanie warstwami | Zaimplementowane; użytkownik potwierdził działanie bieżącej wersji | Aktualny gui/main.py i informacja „działa jak na razie”. |
 | Pole przejezdnosc i migracja | Dostarczony skrypt | Nie zebrano osobnego wyniku SQL potwierdzającego stan kolumn na komputerze. |
 | Klasyfikacja przejezdności | **Niewykonana** | Brak zatwierdzonej metody i danych wynikowych. |
@@ -71,3 +73,10 @@ Docelowo wynik ma zawierać tylko 0 albo 1, z szarym kolorem dla NULL. Do wykona
 6. Sprawdzić wynik na wybranych fragmentach terenu i wpływ rozdzielczości H3.
 
 Przejezdność powierzchni komórki nie dowodzi istnienia ciągłej trasy przez komórkę. Model tras i połączeń nie został wdrożony.
+
+
+## Aktualizacja wyglądu i Windows EXE
+
+Po początkowym zapisie dokumentacji dodano ciemny motyw, ikonę, nowe przyciski i komunikat pustej mapy. Nie zmieniono kryteriów przejezdności ani danych analitycznych. Dodano lokalne skrypty startu/budowania i workflow Build Windows GUI. Build 40493262781 wykonał z powodzeniem test uruchomienia kodu oraz EXE na Windowsie. To nie jest test połączenia z bazą użytkownika ani manualna ocena wszystkich elementów wizualnych.
+
+[Instrukcja pobrania aplikacji](WINDOWS_EXE.md). Wersja dystrybucyjna korzysta z folderu EXE + _internal. Nie zapisujemy plików binarnych build/dist w historii Git.
