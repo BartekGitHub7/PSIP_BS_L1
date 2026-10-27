@@ -6,3 +6,6 @@ __pycache__/
 *.pyc
 backups/
 gui/main_before_*.py
+.venv-build/
+build/
+dist/
