@@ -53,3 +53,14 @@ QA otrzymuje agregaty potrzebne do obliczeń, bez surowego schematu BDOT.
 Opcjonalne tło dróg i cieków wymaga osobnego importu BDOT do QA.
 Stary podgląd dry-run ma odcisk sprzed zapisu i zostanie poprawnie odrzucony przez GUI;
 nowy podgląd tworzy `app/iop.py --dry-run --output NOWY_KATALOG`.
+
+## Wynik wdrożenia QA
+
+Właściwe QA `psip` otrzymało agregaty po kontroli identyczności ID/geometrii,
+próbie transakcyjnej z rollbackiem i próbie pełnego zapisu na odtworzonym klonie.
+Następnie wykonano niezależne obliczenie i `--write` na QA: 63/362/2264 wyniki,
+0 błędów, maksymalna różnica względem audytu 0. Sprawdzono wszystkie rekordy,
+kafelki MVT, odczyt po kliknięciu GUI bez CSV i trzy warianty nazw warstw.
+17+10 testów i smoke-test QA poprawne. Kopie poprzednich wartości są w
+`grid.iop_backup_*`, a rollback/raport w lokalnym `output/iop/deploy_qa_20261103/`.
+Kod scalono z env-test z zachowaniem istniejących commitów QA.
