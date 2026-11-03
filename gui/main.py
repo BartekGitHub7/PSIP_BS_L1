@@ -3,6 +3,7 @@ Wizualizacja od -1 do 1; BDOT pozostaje w bazie jako zrodlo obliczen.
 Kafelki MVT z PostGIS bez serwera HTTP i pobierania pelnych warstw.
 """
 import math
+import json
 import argparse
 import sys
 from pathlib import Path as FilePath
@@ -313,6 +314,7 @@ class GISApp(tk.Tk):
         self.drag = None
         self.pan_origin = None
         self.pan_moved = False
+        self.selected_hexagon = None
         self.timer = None
         self.error_keys = set()
         self.tile_errors = 0
@@ -525,6 +527,8 @@ class GISApp(tk.Tk):
             layer["visible"].set(layer is active)
         self.cache.clear()
         self.error_keys.clear()
+        self.selected_hexagon = None
+        self.map.delete("selected_hex")
         self.refresh_layer_tree(active["key"])
         self.cell_info.set("Kliknij heksagon, aby odczytać przejezdność.")
         self.fit_layers()
@@ -718,6 +722,7 @@ class GISApp(tk.Tk):
             self.pending.add(key)
             future = self.pool.submit(fetch_tile,layer,z,x,y)
             future.add_done_callback(lambda f,k=key:self.tile_done(k,f))
+        self.draw_selected_hexagon()
         self.status.set(f"MVT | EPSG:3857 | zoom {self.zoom_level} | widoczne kafelki: {cached} | "
                         f"pobieranie: {len(self.pending)} | transfer: {self.bytes_received/1024:.0f} KiB"
                         + (f" | Błędy: {self.tile_errors} — {self.last_error[:140]}" if self.tile_errors else ""))
@@ -782,6 +787,7 @@ class GISApp(tk.Tk):
         size=TILE_SIZE*2**self.zoom_level
         self.center=(self.center[0]-dx/size,self.center[1]-dy/size)
         self.map.move("tile",dx,dy)
+        self.map.move("selected_hex",dx,dy)
         self.drag=(event.x,event.y)
 
     def pan_end(self,event):
@@ -806,7 +812,8 @@ class GISApp(tk.Tk):
 
         def work():
             query=sql.SQL("""
-                SELECT {id}::text, {value}
+                SELECT {id}::text, {value},
+                       ST_AsGeoJSON(ST_Transform({geom},3857))
                 FROM {table}
                 WHERE ST_Intersects({geom},ST_Transform(
                     ST_SetSRID(ST_MakePoint(%s,%s),3857),%s))
@@ -823,10 +830,20 @@ class GISApp(tk.Tk):
                 return connection.execute(query,(merc_x,merc_y,layer["srid"])).fetchone()
 
         def finished(result):
+            if not any(l["key"]==layer["key"] and l["visible"].get()
+                       for l in self.layers):
+                return  # Wynik z nieaktywnej juz siatki.
             if result is None:
+                self.selected_hexagon = None
+                self.draw_selected_hexagon()
                 self.cell_info.set("W tym miejscu nie znaleziono heksagonu.")
             else:
-                h3id,value=result
+                h3id,value,geojson=result
+                self.selected_hexagon = {
+                    "layer_key": layer["key"],
+                    "geometry": shape(json.loads(geojson)) if geojson else None,
+                }
+                self.draw_selected_hexagon()
                 if value is None:
                     score="NULL — wynik nieobliczony"
                 else:
@@ -843,6 +860,35 @@ class GISApp(tk.Tk):
                 )
 
         self.run_background(work,finished)
+
+    def draw_selected_hexagon(self):
+        """Podswietl obrys wybranej komorki na aktualnym widoku mapy."""
+        self.map.delete("selected_hex")
+        selected=self.selected_hexagon
+        if not selected:
+            return
+        if not any(layer["key"]==selected["layer_key"] and layer["visible"].get()
+                   for layer in self.layers):
+            return
+        geom=selected["geometry"]
+        if geom is None or geom.is_empty:
+            return
+        polygons=([geom] if geom.geom_type=="Polygon" else
+                  list(geom.geoms) if geom.geom_type=="MultiPolygon" else [])
+        size=TILE_SIZE*2**self.zoom_level
+        width,height=self.map.winfo_width(),self.map.winfo_height()
+        for polygon in polygons:
+            coordinates=[]
+            for mx,my,*_ in polygon.exterior.coords:
+                x=(mx+HALF_WORLD)/WORLD*size-self.center[0]*size+width/2
+                y=(HALF_WORLD-my)/WORLD*size-self.center[1]*size+height/2
+                coordinates.extend((x,y))
+            if len(coordinates)>=6:
+                self.map.create_polygon(
+                    *coordinates,fill="",outline="#38bdf8",
+                    width=4,joinstyle=tk.ROUND,tags="selected_hex"
+                )
+        self.map.tag_raise("selected_hex")
 
     def wheel(self,event):
         if event.delta:
