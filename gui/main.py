@@ -1,5 +1,6 @@
-"""PSIP: natywny interfejs Tkinter, kafelki wektorowe MVT z PostGIS.
-Siatki: id + geom + przejezdnosc. BDOT: id + geom. Bez serwera HTTP i bez pobierania całych warstw.
+"""PSIP: mapa przejezdnosci na siatkach H3 R6/R7/R8.
+Wizualizacja od -1 do 1; BDOT pozostaje w bazie jako zrodlo obliczen.
+Kafelki MVT z PostGIS bez serwera HTTP i pobierania pelnych warstw.
 """
 import math
 import argparse
@@ -33,7 +34,7 @@ EXTENT = 4096
 BUFFER = 64
 CACHE_LIMIT = 192  # około 48 MiB obrazów RGBA
 NO_DATA_COLOR = "#bdbdbd"
-RAMP = ("#d73027", "#fee08b", "#1a9850")
+RAMP = ("#d73027", "#ffffff", "#1a9850")
 RENDER_LOCK = threading.Lock()  # Matplotlib nie jest bezpieczny wielowątkowo
 
 
@@ -124,15 +125,15 @@ def dark_titlebar(window):
 
 
 def passability_color(value):
-    """Stała skala 0–1; NULL/NaN/dane poza zakresem nie udają wyniku."""
+    """Stala skala -1..1: czerwony -> bialy (0) -> zielony; NULL jest szary."""
     try:
         value = float(value)
     except (TypeError, ValueError):
         return NO_DATA_COLOR
-    if not math.isfinite(value) or not 0 <= value <= 1:
+    if not math.isfinite(value) or not -1 <= value <= 1:
         return NO_DATA_COLOR
-    a, b = (RAMP[0], RAMP[1]) if value <= 0.5 else (RAMP[1], RAMP[2])
-    fraction = value * 2 if value <= 0.5 else (value - 0.5) * 2
+    a, b = (RAMP[0], RAMP[1]) if value <= 0 else (RAMP[1], RAMP[2])
+    fraction = value + 1 if value <= 0 else value
     return to_hex(tuple(x+(y-x)*fraction for x,y in zip(to_rgb(a),to_rgb(b))))
 
 
@@ -310,6 +311,8 @@ class GISApp(tk.Tk):
         self.zoom_level = 9
         self.center = (21.0/360+0.5, 0.33)
         self.drag = None
+        self.pan_origin = None
+        self.pan_moved = False
         self.timer = None
         self.error_keys = set()
         self.tile_errors = 0
@@ -324,7 +327,7 @@ class GISApp(tk.Tk):
         ttk.Label(header,text="POSTGIS  ·  MVT",style="Badge.TLabel").pack(side="right")
         toolbar = ttk.Frame(self,padding=(16,10))
         toolbar.pack(fill="x",pady=(0,1))
-        self.add_button = ttk.Button(toolbar,text="＋  Dodaj dane",style="Primary.TButton",command=self.open_database)
+        self.add_button = ttk.Button(toolbar,text="Połącz z H3",style="Primary.TButton",command=self.open_database)
         self.add_button.pack(side="left")
         ttk.Button(toolbar,text="Dopasuj widok",command=self.fit_layers).pack(side="left",padx=(10,4))
         ttk.Button(toolbar,text="Odśwież mapę",command=self.clear_cache).pack(side="left",padx=4)
@@ -335,50 +338,44 @@ class GISApp(tk.Tk):
         layout.pack(fill="both",expand=True)
         sidebar = ttk.Frame(layout,padding=(14,14),width=320)
         layout.add(sidebar,weight=0)
-        ttk.Label(sidebar,text="WARSTWY",style="Title.TLabel").pack(anchor="w")
-        ttk.Label(sidebar,text="Kliknij warstwę, aby ją wybrać.\n☑/☐ przełącza widoczność. Górna warstwa\njest rysowana na wierzchu.",
-                  wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,12))
-        layer_box = ttk.Frame(sidebar)
-        layer_box.pack(fill="both",expand=True)
-        self.layer_tree = ttk.Treeview(layer_box,columns=("show","name"),show="headings",
-                                      selectmode="browse",height=8)
+        ttk.Label(sidebar,text="ROZDZIELCZOŚĆ H3",style="Title.TLabel").pack(anchor="w")
+        ttk.Label(sidebar,text="Wybierz R6, R7 lub R8. Na mapie widoczna jest wyłącznie jedna siatka.",
+                   wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,10))
+        self.layer_tree = ttk.Treeview(sidebar,columns=("show","name"),show="headings",
+                                      selectmode="browse",height=3)
         self.layer_tree.heading("show",text="✓")
-        self.layer_tree.heading("name",text="Warstwa")
+        self.layer_tree.heading("name",text="Siatka")
         self.layer_tree.column("show",width=35,stretch=False,anchor="center")
-        self.layer_tree.column("name",width=255)
-        scroll = ttk.Scrollbar(layer_box,orient="vertical",command=self.layer_tree.yview)
-        self.layer_tree.configure(yscrollcommand=scroll.set)
-        self.layer_tree.pack(side="left",fill="both",expand=True)
-        scroll.pack(side="right",fill="y")
-        self.layer_tree.bind("<ButtonRelease-1>",self.layer_clicked)
-        self.layer_tree.bind("<<TreeviewSelect>>",lambda e:self.update_layer_info())
-        self.layer_tree.bind("<Delete>",lambda e:self.remove_selected())
-        self.layer_tree.bind("<Button-3>",self.layer_menu)
-        controls = ttk.Frame(sidebar)
-        controls.pack(fill="x",pady=(12,6))
-        controls.columnconfigure(0,weight=1)
-        controls.columnconfigure(1,weight=1)
-        ttk.Button(controls,text="↑  Wyżej",command=lambda:self.move_selected(1)).grid(row=0,column=0,sticky="ew",padx=(0,3),pady=3)
-        ttk.Button(controls,text="↓  Niżej",command=lambda:self.move_selected(-1)).grid(row=0,column=1,sticky="ew",padx=(3,0),pady=3)
-        ttk.Button(controls,text="Pokaż / ukryj",command=self.toggle_selected).grid(row=1,column=0,sticky="ew",padx=(0,3),pady=3)
-        ttk.Button(controls,text="Przybliż",command=self.fit_selected).grid(row=1,column=1,sticky="ew",padx=(3,0),pady=3)
-        ttk.Button(controls,text="Usuń warstwę",style="Danger.TButton",command=self.remove_selected).grid(row=2,column=0,columnspan=2,sticky="ew",pady=(3,0))
-        ttk.Button(sidebar,text="Otwórz tabelę danych",command=self.show_attributes).pack(fill="x",pady=(0,4))
-        self.layer_info = tk.StringVar(value="Wybierz siatkę H3, aby zobaczyć przejezdność.")
+        self.layer_tree.column("name",width=220)
+        self.layer_tree.pack(fill="x",pady=(0,10))
+        self.layer_tree.bind("<<TreeviewSelect>>",self.layer_clicked)
+        ttk.Button(sidebar,text="Tabela wybranej siatki",command=self.show_attributes).pack(fill="x",pady=(0,5))
+        self.layer_info = tk.StringVar(value="Połącz się z bazą, aby wczytać siatki H3.")
         ttk.Label(sidebar,textvariable=self.layer_info,wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=8)
-        legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · SKALA ROBOCZA",padding=12)
+        selected_frame = ttk.LabelFrame(sidebar,text="WYBRANY HEKSAGON",padding=12)
+        selected_frame.pack(fill="x",pady=(8,6))
+        self.cell_info = tk.StringVar(value="Kliknij heksagon na mapie, aby zobaczyć ID i wartość przejezdności.")
+        ttk.Label(selected_frame,textvariable=self.cell_info,wraplength=270).pack(anchor="w")
+        legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · −1 DO +1",padding=12)
         legend.pack(fill="x",pady=6)
-        bar = tk.Canvas(legend,width=240,height=16,bg=THEME["panel"],highlightthickness=0)
+        bar = tk.Canvas(legend,width=240,height=30,bg=THEME["panel"],highlightthickness=0)
         bar.pack(fill="x")
         for x in range(240):
-            bar.create_line(x,0,x,16,fill=passability_color(x/239))
-        ttk.Label(legend,text="0 — nieprzejezdne          1 — przejezdne").pack(anchor="w")
+            bar.create_line(x,0,x,17,fill=passability_color(-1+2*x/239))
+        for i in range(11):
+            x = round(i*239/10)
+            bar.create_line(x,18,x,26,fill=THEME["text"])
+        labels = ttk.Frame(legend)
+        labels.pack(fill="x")
+        ttk.Label(labels,text="−1").pack(side="left")
+        ttk.Label(labels,text="0").pack(side="left",expand=True)
+        ttk.Label(labels,text="+1").pack(side="right")
+        ttk.Label(legend,text="Czerwony → biały → zielony\\n10 równych odcinków po 0,2.",
+                  style="Muted.TLabel").pack(anchor="w",pady=(6,0))
         empty = ttk.Frame(legend)
         empty.pack(anchor="w",pady=(6,0))
         tk.Label(empty,bg=NO_DATA_COLOR,width=3,relief="flat").pack(side="left",padx=(0,5))
-        ttk.Label(empty,text="Brak danych (NULL)").pack(side="left")
-        ttk.Label(legend,text="Kolory komórek, nie gęstość punktów.\nWartości musi dostarczyć analiza.",
-                  wraplength=265,style="Muted.TLabel").pack(anchor="w",pady=(6,0))
+        ttk.Label(empty,text="NULL — wynik nieobliczony").pack(side="left")
         map_panel = ttk.Frame(layout)
         layout.add(map_panel,weight=1)
         map_heading = ttk.Frame(map_panel,padding=(14,10))
@@ -803,8 +800,8 @@ class GISApp(tk.Tk):
         self.map.delete("empty")
         if not any(layer["visible"].get() for layer in self.layers):
             cx,cy = self.map.winfo_width()/2,self.map.winfo_height()/2
-            title = "Dodaj pierwszą warstwę" if not self.layers else "Warstwy są ukryte"
-            subtitle = "Kliknij ＋ Dodaj dane i wybierz siatkę H3 lub BDOT z PostGIS." if not self.layers else "Włącz widoczność wybranej warstwy w panelu po lewej."
+            title = "Połącz z siatkami H3" if not self.layers else "Wybierz rozdzielczość H3"
+            subtitle = "Kliknij Połącz z H3, aby wczytać R6, R7 i R8." if not self.layers else "Wybierz jedną z siatek w panelu po lewej."
             self.map.create_text(cx,cy-16,text=title,fill=THEME["text"],font=("Segoe UI",20,"bold"),tags="empty")
             self.map.create_text(cx,cy+24,text=subtitle,fill=THEME["muted"],font=("Segoe UI",10),width=max(200,self.map.winfo_width()-80),tags="empty")
         self.photos.clear()
