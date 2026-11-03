@@ -1,7 +1,9 @@
-"""PSIP: natywny interfejs Tkinter, kafelki wektorowe MVT z PostGIS.
-Siatki: id + geom + przejezdnosc. BDOT: id + geom. Bez serwera HTTP i bez pobierania całych warstw.
+"""PSIP: mapa przejezdnosci na siatkach H3 R6/R7/R8.
+Wizualizacja od -1 do 1; BDOT pozostaje w bazie jako zrodlo obliczen.
+Kafelki MVT z PostGIS bez serwera HTTP i pobierania pelnych warstw.
 """
 import math
+import json
 import argparse
 import sys
 from pathlib import Path as FilePath
@@ -33,7 +35,7 @@ EXTENT = 4096
 BUFFER = 64
 CACHE_LIMIT = 192  # około 48 MiB obrazów RGBA
 NO_DATA_COLOR = "#bdbdbd"
-RAMP = ("#d73027", "#fee08b", "#1a9850")
+RAMP = ("#d73027", "#ffffff", "#1a9850")
 RENDER_LOCK = threading.Lock()  # Matplotlib nie jest bezpieczny wielowątkowo
 
 
@@ -124,15 +126,15 @@ def dark_titlebar(window):
 
 
 def passability_color(value):
-    """Stała skala 0–1; NULL/NaN/dane poza zakresem nie udają wyniku."""
+    """Stala skala -1..1: czerwony -> bialy (0) -> zielony; NULL jest szary."""
     try:
         value = float(value)
     except (TypeError, ValueError):
         return NO_DATA_COLOR
-    if not math.isfinite(value) or not 0 <= value <= 1:
+    if not math.isfinite(value) or not -1 <= value <= 1:
         return NO_DATA_COLOR
-    a, b = (RAMP[0], RAMP[1]) if value <= 0.5 else (RAMP[1], RAMP[2])
-    fraction = value * 2 if value <= 0.5 else (value - 0.5) * 2
+    a, b = (RAMP[0], RAMP[1]) if value <= 0 else (RAMP[1], RAMP[2])
+    fraction = value + 1 if value <= 0 else value
     return to_hex(tuple(x+(y-x)*fraction for x,y in zip(to_rgb(a),to_rgb(b))))
 
 
@@ -310,6 +312,9 @@ class GISApp(tk.Tk):
         self.zoom_level = 9
         self.center = (21.0/360+0.5, 0.33)
         self.drag = None
+        self.pan_origin = None
+        self.pan_moved = False
+        self.selected_hexagon = None
         self.timer = None
         self.error_keys = set()
         self.tile_errors = 0
@@ -324,7 +329,7 @@ class GISApp(tk.Tk):
         ttk.Label(header,text="POSTGIS  ·  MVT",style="Badge.TLabel").pack(side="right")
         toolbar = ttk.Frame(self,padding=(16,10))
         toolbar.pack(fill="x",pady=(0,1))
-        self.add_button = ttk.Button(toolbar,text="＋  Dodaj dane",style="Primary.TButton",command=self.open_database)
+        self.add_button = ttk.Button(toolbar,text="Połącz z H3",style="Primary.TButton",command=self.open_database)
         self.add_button.pack(side="left")
         ttk.Button(toolbar,text="Dopasuj widok",command=self.fit_layers).pack(side="left",padx=(10,4))
         ttk.Button(toolbar,text="Odśwież mapę",command=self.clear_cache).pack(side="left",padx=4)
@@ -335,50 +340,44 @@ class GISApp(tk.Tk):
         layout.pack(fill="both",expand=True)
         sidebar = ttk.Frame(layout,padding=(14,14),width=320)
         layout.add(sidebar,weight=0)
-        ttk.Label(sidebar,text="WARSTWY",style="Title.TLabel").pack(anchor="w")
-        ttk.Label(sidebar,text="Kliknij warstwę, aby ją wybrać.\n☑/☐ przełącza widoczność. Górna warstwa\njest rysowana na wierzchu.",
-                  wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,12))
-        layer_box = ttk.Frame(sidebar)
-        layer_box.pack(fill="both",expand=True)
-        self.layer_tree = ttk.Treeview(layer_box,columns=("show","name"),show="headings",
-                                      selectmode="browse",height=8)
+        ttk.Label(sidebar,text="ROZDZIELCZOŚĆ H3",style="Title.TLabel").pack(anchor="w")
+        ttk.Label(sidebar,text="Wybierz R6, R7 lub R8. Na mapie widoczna jest wyłącznie jedna siatka.",
+                   wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,10))
+        self.layer_tree = ttk.Treeview(sidebar,columns=("show","name"),show="headings",
+                                      selectmode="browse",height=3)
         self.layer_tree.heading("show",text="✓")
-        self.layer_tree.heading("name",text="Warstwa")
+        self.layer_tree.heading("name",text="Siatka")
         self.layer_tree.column("show",width=35,stretch=False,anchor="center")
-        self.layer_tree.column("name",width=255)
-        scroll = ttk.Scrollbar(layer_box,orient="vertical",command=self.layer_tree.yview)
-        self.layer_tree.configure(yscrollcommand=scroll.set)
-        self.layer_tree.pack(side="left",fill="both",expand=True)
-        scroll.pack(side="right",fill="y")
-        self.layer_tree.bind("<ButtonRelease-1>",self.layer_clicked)
-        self.layer_tree.bind("<<TreeviewSelect>>",lambda e:self.update_layer_info())
-        self.layer_tree.bind("<Delete>",lambda e:self.remove_selected())
-        self.layer_tree.bind("<Button-3>",self.layer_menu)
-        controls = ttk.Frame(sidebar)
-        controls.pack(fill="x",pady=(12,6))
-        controls.columnconfigure(0,weight=1)
-        controls.columnconfigure(1,weight=1)
-        ttk.Button(controls,text="↑  Wyżej",command=lambda:self.move_selected(1)).grid(row=0,column=0,sticky="ew",padx=(0,3),pady=3)
-        ttk.Button(controls,text="↓  Niżej",command=lambda:self.move_selected(-1)).grid(row=0,column=1,sticky="ew",padx=(3,0),pady=3)
-        ttk.Button(controls,text="Pokaż / ukryj",command=self.toggle_selected).grid(row=1,column=0,sticky="ew",padx=(0,3),pady=3)
-        ttk.Button(controls,text="Przybliż",command=self.fit_selected).grid(row=1,column=1,sticky="ew",padx=(3,0),pady=3)
-        ttk.Button(controls,text="Usuń warstwę",style="Danger.TButton",command=self.remove_selected).grid(row=2,column=0,columnspan=2,sticky="ew",pady=(3,0))
-        ttk.Button(sidebar,text="Otwórz tabelę danych",command=self.show_attributes).pack(fill="x",pady=(0,4))
-        self.layer_info = tk.StringVar(value="Wybierz siatkę H3, aby zobaczyć przejezdność.")
+        self.layer_tree.column("name",width=220)
+        self.layer_tree.pack(fill="x",pady=(0,10))
+        self.layer_tree.bind("<<TreeviewSelect>>",self.layer_clicked)
+        ttk.Button(sidebar,text="Tabela wybranej siatki",command=self.show_attributes).pack(fill="x",pady=(0,5))
+        self.layer_info = tk.StringVar(value="Połącz się z bazą, aby wczytać siatki H3.")
         ttk.Label(sidebar,textvariable=self.layer_info,wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=8)
-        legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · SKALA ROBOCZA",padding=12)
+        selected_frame = ttk.LabelFrame(sidebar,text="WYBRANY HEKSAGON",padding=12)
+        selected_frame.pack(fill="x",pady=(8,6))
+        self.cell_info = tk.StringVar(value="Kliknij heksagon na mapie, aby zobaczyć ID i wartość przejezdności.")
+        ttk.Label(selected_frame,textvariable=self.cell_info,wraplength=270).pack(anchor="w")
+        legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · −1 DO +1",padding=12)
         legend.pack(fill="x",pady=6)
-        bar = tk.Canvas(legend,width=240,height=16,bg=THEME["panel"],highlightthickness=0)
+        bar = tk.Canvas(legend,width=240,height=30,bg=THEME["panel"],highlightthickness=0)
         bar.pack(fill="x")
         for x in range(240):
-            bar.create_line(x,0,x,16,fill=passability_color(x/239))
-        ttk.Label(legend,text="0 — nieprzejezdne          1 — przejezdne").pack(anchor="w")
+            bar.create_line(x,0,x,17,fill=passability_color(-1+2*x/239))
+        for i in range(11):
+            x = round(i*239/10)
+            bar.create_line(x,18,x,26,fill=THEME["text"])
+        labels = ttk.Frame(legend)
+        labels.pack(fill="x")
+        ttk.Label(labels,text="−1").pack(side="left")
+        ttk.Label(labels,text="0").pack(side="left",expand=True)
+        ttk.Label(labels,text="+1").pack(side="right")
+        ttk.Label(legend,text="Czerwony → biały → zielony\n10 równych odcinków po 0,2.",
+                  style="Muted.TLabel").pack(anchor="w",pady=(6,0))
         empty = ttk.Frame(legend)
         empty.pack(anchor="w",pady=(6,0))
         tk.Label(empty,bg=NO_DATA_COLOR,width=3,relief="flat").pack(side="left",padx=(0,5))
-        ttk.Label(empty,text="Brak danych (NULL)").pack(side="left")
-        ttk.Label(legend,text="Kolory komórek, nie gęstość punktów.\nWartości musi dostarczyć analiza.",
-                  wraplength=265,style="Muted.TLabel").pack(anchor="w",pady=(6,0))
+        ttk.Label(empty,text="NULL — wynik nieobliczony").pack(side="left")
         map_panel = ttk.Frame(layout)
         layout.add(map_panel,weight=1)
         map_heading = ttk.Frame(map_panel,padding=(14,10))
@@ -436,258 +435,142 @@ class GISApp(tk.Tk):
         self.after(100, self.process_events)
 
     def open_database(self):
+        """Tylko polaczenie i wybor siatek H3; bez katalogu warstw BDOT."""
         dialog = tk.Toplevel(self)
         dialog.configure(background=THEME["panel"])
         dialog.after(100,lambda:dark_titlebar(dialog))
-        dialog.title("Dodaj dane z PostgreSQL / PostGIS")
-        dialog.geometry("840x640")
-        dialog.minsize(760,580)
+        dialog.title("Połącz z siatkami H3")
+        dialog.geometry("420x320")
         dialog.transient(self)
         dialog.grab_set()
-
-        form = ttk.Frame(dialog, padding=10)
-        form.pack(fill="x")
-
+        form = ttk.Frame(dialog,padding=16)
+        form.pack(fill="both",expand=True)
         defaults = [
-            ("Host", "localhost"),
-            ("Port", "5444"),
-            ("Baza", "psip"),
-            ("Użytkownik", "psip"),
-            ("Hasło", ""),
+            ("Host","localhost"),("Port","5444"),("Baza","psip"),
+            ("Użytkownik","psip"),("Hasło",""),
         ]
         fields = {}
-
-        for row, (label, default) in enumerate(defaults):
-            ttk.Label(form, text=label).grid(
-                row=row, column=0, sticky="w", pady=3
-            )
-            value = tk.StringVar(value=self.last_settings.get(label, default))
-            fields[label] = value
-            ttk.Entry(
-                form,
-                textvariable=value,
-                show="*" if label == "Hasło" else "",
-                width=35,
-            ).grid(row=row, column=1, sticky="w", padx=10)
-
-        tree = ttk.Treeview(
-            dialog,
-            columns=("schema", "table", "geometry", "srid"),
-            show="headings",
-            selectmode="extended",
-        )
-
-        for name, title, width in [
-            ("schema", "Schemat", 100),
-            ("table", "Warstwa", 260),
-            ("geometry", "Geometria", 130),
-            ("srid", "EPSG", 70),
-        ]:
-            tree.heading(name, text=title)
-            tree.column(name, width=width)
-
-        tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-        info = ttk.Label(
-            dialog, text="Połącz się. Ctrl pozwala zaznaczyć kilka warstw."
-        )
-        info.pack(anchor="w", padx=10)
-
-        buttons = ttk.Frame(dialog, padding=10)
-        buttons.pack(fill="x")
-        connection_settings = {}
+        for idx,(label,default) in enumerate(defaults):
+            ttk.Label(form,text=label).grid(row=idx,column=0,sticky="w",pady=7)
+            var=tk.StringVar(value=self.last_settings.get(label,default))
+            fields[label]=var
+            ttk.Entry(form,textvariable=var,show="*" if label=="Hasło" else "",
+                      width=26).grid(row=idx,column=1,sticky="ew",padx=10,pady=7)
+        form.columnconfigure(1,weight=1)
 
         def connect():
             try:
-                settings = {
-                    "host": fields["Host"].get().strip(),
-                    "port": int(fields["Port"].get()),
-                    "dbname": fields["Baza"].get().strip(),
-                    "user": fields["Użytkownik"].get().strip(),
-                    "password": fields["Hasło"].get(),
-                    "connect_timeout": 8,
-                    "options": (
-                        "-c default_transaction_read_only=on "
-                        "-c statement_timeout=60000"
-                    ),
-                }
+                settings=dict(
+                    host=fields["Host"].get().strip(),
+                    port=int(fields["Port"].get()),
+                    dbname=fields["Baza"].get().strip(),
+                    user=fields["Użytkownik"].get().strip(),
+                    password=fields["Hasło"].get(),
+                    connect_timeout=8,
+                    options="-c default_transaction_read_only=on -c statement_timeout=60000",
+                )
             except ValueError:
-                messagebox.showerror("Błąd", "Port musi być liczbą.")
+                messagebox.showerror("Błąd","Port musi być liczbą.",parent=dialog)
                 return
 
             def work():
                 with psycopg.connect(**settings) as connection:
-                    return connection.execute(
-                        """
-                        SELECT f_table_schema, f_table_name,
-                               f_geometry_column, srid
-                        FROM public.geometry_columns
-                        WHERE f_table_schema IN ('grid', 'bdot', 'public')
-                        ORDER BY f_table_schema, f_table_name,
-                                 f_geometry_column
-                        """
+                    rows=connection.execute(
+                        """SELECT f_table_schema,f_table_name,f_geometry_column,srid
+                           FROM public.geometry_columns
+                           WHERE f_table_schema='grid'
+                             AND f_table_name IN ('h3_r6','h3_r7','h3_r8')
+                           ORDER BY f_table_name"""
                     ).fetchall()
-
-            def finished(rows):
-                if not dialog.winfo_exists():
-                    return
-
-                self.last_settings = {
-                    label: value.get() for label, value in fields.items()
-                    if label != "Hasło"
-                }
-                connection_settings.clear()
-                connection_settings.update(settings)
-
-                for item in tree.get_children():
-                    tree.delete(item)
-
-                for row in rows:
-                    tree.insert("", "end", values=row)
-
-                info.configure(text=f"Połączono. Dostępne warstwy: {len(rows)}")
-                self.status.set("Połączono z bazą")
-
-            self.status.set("Łączenie z PostgreSQL…")
-            self.run_background(work, finished)
-
-        def add_selected():
-            selected = [
-                tree.item(item, "values") for item in tree.selection()
-            ]
-            if not selected or not connection_settings:
-                messagebox.showinfo("Wybór warstw", "Połącz się i wybierz warstwę.")
-                return
-
-            settings = dict(connection_settings)
-
-            def work():
-                with psycopg.connect(**settings) as connection:
-                    return [describe_layer(connection, row, settings) for row in selected]
+                    if len({row[1] for row in rows})!=3:
+                        raise ValueError("W bazie muszą istnieć siatki grid.h3_r6, h3_r7 i h3_r8.")
+                    return [describe_layer(connection,row,settings) for row in rows]
 
             def finished(loaded):
+                if not dialog.winfo_exists():
+                    return
+                self.last_settings={
+                    label:var.get() for label,var in fields.items() if label!="Hasło"
+                }
+                self.layers=[]
+                self.cache.clear()
+                self.error_keys.clear()
+                self.pending.clear()
                 for layer in loaded:
                     self.add_layer(layer)
-                if dialog.winfo_exists():
-                    dialog.destroy()
+                self.choose_resolution("h3_r8")
                 self.fit_layers()
+                self.cell_info.set("Kliknij heksagon, aby wyświetlić dokładną wartość.")
+                self.status.set("Połączono z siatkami H3 — wybrano R8")
+                dialog.destroy()
 
-            self.status.set("Odczyt metadanych i zasięgu — bez pobierania całej warstwy…")
-            self.run_background(work, finished)
+            self.status.set("Łączenie z siatkami H3…")
+            self.run_background(work,finished)
 
-        ttk.Button(
-            buttons, text="Połącz", command=connect
-        ).pack(side="left")
-
-        ttk.Button(
-            buttons, text="Dodaj zaznaczone", style="Primary.TButton", command=add_selected
-        ).pack(side="right")
+        ttk.Button(form,text="Połącz",style="Primary.TButton",command=connect).grid(
+            row=len(defaults),column=0,columnspan=2,sticky="ew",pady=(15,0)
+        )
 
     def add_layer(self, layer):
-        # Ta sama warstwa z tego samego połączenia nie jest dodawana drugi raz.
-        for previous in self.layers:
-            if (previous["name"]==layer["name"] and
-                all(previous["settings"].get(k)==layer["settings"].get(k)
-                    for k in ("host","port","dbname","user"))):
-                previous["visible"].set(True)
-                self.refresh_layer_tree(previous["key"])
-                self.schedule_draw()
-                return
-        self.serial += 1
-        layer.update(key=self.serial, color=COLORS[(self.serial-1)%len(COLORS)],
-                     visible=tk.BooleanVar(value=True))
+        self.serial+=1
+        layer.update(key=self.serial,color="#ffffff",
+                     visible=tk.BooleanVar(value=False))
         self.layers.append(layer)
-        self.refresh_layer_tree(layer["key"])
+        self.refresh_layer_tree()
+
+    def choose_resolution(self, name):
+        """Jedna aktywna siatka, bez nakladania geometrii roznych H3."""
+        active=next((l for l in self.layers if l["table"]==name),None)
+        if active is None:
+            return
+        for layer in self.layers:
+            layer["visible"].set(layer is active)
+        self.cache.clear()
+        self.error_keys.clear()
+        self.selected_hexagon = None
+        self.map.delete("selected_hex")
+        self.refresh_layer_tree(active["key"])
+        self.cell_info.set("Kliknij heksagon, aby odczytać przejezdność.")
+        self.fit_layers()
 
     def selected_layer(self):
-        selection = self.layer_tree.selection()
-        return next((l for l in self.layers if selection and str(l["key"])==selection[0]),None)
+        selection=self.layer_tree.selection()
+        return next((l for l in self.layers
+                     if selection and str(l["key"])==selection[0]),None)
 
     def refresh_layer_tree(self, selected=None):
-        if selected is None:
-            layer = self.selected_layer()
-            selected = layer["key"] if layer else None
         for item in self.layer_tree.get_children():
             self.layer_tree.delete(item)
-        for layer in reversed(self.layers):
+        for layer in self.layers:
             self.layer_tree.insert("","end",iid=str(layer["key"]),
-                values=("☑" if layer["visible"].get() else "☐",layer["name"]))
+                values=("●" if layer["visible"].get() else "○",layer["table"].upper()))
+        if selected is None:
+            active=next((l for l in self.layers if l["visible"].get()),None)
+            selected=active["key"] if active else None
         if selected is not None and self.layer_tree.exists(str(selected)):
             self.layer_tree.selection_set(str(selected))
             self.layer_tree.focus(str(selected))
         self.update_layer_info()
 
     def update_layer_info(self):
-        layer = self.selected_layer()
+        layer=self.selected_layer()
         if layer is None:
-            self.layer_info.set("Wybierz warstwę.")
-        elif layer.get("is_grid"):
-            missing = "\nBrak kolumny — uruchom add_passability.sql." if not layer["has_passability"] else ""
-            self.layer_info.set("Siatka: ID + geometria + przejezdnosc.\n"
-                                "NULL = szary. Skala stała: 0–1."+missing)
+            self.layer_info.set("Połącz się z bazą, aby wczytać siatki H3.")
         else:
-            self.layer_info.set("Warstwa pomocnicza: ID + geometria.\nMapa: EPSG:3857.")
+            self.layer_info.set(f"Aktywna siatka: {layer['table'].upper()}\n"
+                "Przejezdność −1…+1; NULL = brak obliczeń."
+                + ("" if layer["has_passability"] else
+                   "\nBrak kolumny przejezdnosc — uruchom migrację SQL."))
 
-    def layer_clicked(self,event):
-        item = self.layer_tree.identify_row(event.y)
-        if item and self.layer_tree.identify_column(event.x)=="#1":
-            self.layer_tree.selection_set(item)
-            self.toggle_selected()
-
-    def toggle_selected(self):
-        layer = self.selected_layer()
-        if layer:
-            layer["visible"].set(not layer["visible"].get())
-            self.refresh_layer_tree(layer["key"])
-            self.schedule_draw()
-
-    def remove_selected(self):
-        layer = self.selected_layer()
-        if layer is None:
-            return
-        key = layer["key"]
-        self.layers.remove(layer)  # Tylko z mapy. Bez DELETE/DROP w bazie.
-        self.cache = OrderedDict((k,v) for k,v in self.cache.items() if k[0]!=key)
-        self.error_keys = {k for k in self.error_keys if k[0]!=key}
-        self.visible_keys = {k for k in self.visible_keys if k[0]!=key}
-        self.refresh_layer_tree(self.layers[-1]["key"] if self.layers else None)
-        self.schedule_draw()
-
-    def move_selected(self,direction):
-        layer = self.selected_layer()
-        if layer is None:
-            return
-        i = self.layers.index(layer)
-        j = i+direction
-        if 0<=j<len(self.layers):
-            self.layers[i],self.layers[j] = self.layers[j],self.layers[i]
-            self.refresh_layer_tree(layer["key"])
-            self.schedule_draw()
-
-    def layer_menu(self,event):
-        item = self.layer_tree.identify_row(event.y)
-        if not item:
-            return
-        self.layer_tree.selection_set(item)
-        menu = tk.Menu(self,tearoff=False)
-        for label,command in [("Pokaż/ukryj",self.toggle_selected),
-                              ("Przybliż do warstwy",self.fit_selected),
-                              ("Tabela danych",self.show_attributes),
-                              ("Wyżej",lambda:self.move_selected(1)),
-                              ("Niżej",lambda:self.move_selected(-1)),
-                              ("Usuń z mapy",self.remove_selected)]:
-            menu.add_command(label=label,command=command)
-        try:
-            menu.tk_popup(event.x_root,event.y_root)
-        finally:
-            menu.grab_release()
+    def layer_clicked(self,event=None):
+        layer=self.selected_layer()
+        if layer and not layer["visible"].get():
+            self.choose_resolution(layer["table"])
 
     def fit_selected(self):
         layer = self.selected_layer()
         if layer:
-            layer["visible"].set(True)
-            self.refresh_layer_tree(layer["key"])
-            self.fit_bounds([layer["bounds"]] if layer["bounds"] else [])
+            self.choose_resolution(layer["table"])
 
     def fit_layers(self):
         self.fit_bounds([l["bounds"] for l in self.layers if l["visible"].get() and l["bounds"]])
@@ -803,8 +686,8 @@ class GISApp(tk.Tk):
         self.map.delete("empty")
         if not any(layer["visible"].get() for layer in self.layers):
             cx,cy = self.map.winfo_width()/2,self.map.winfo_height()/2
-            title = "Dodaj pierwszą warstwę" if not self.layers else "Warstwy są ukryte"
-            subtitle = "Kliknij ＋ Dodaj dane i wybierz siatkę H3 lub BDOT z PostGIS." if not self.layers else "Włącz widoczność wybranej warstwy w panelu po lewej."
+            title = "Połącz z siatkami H3" if not self.layers else "Wybierz rozdzielczość H3"
+            subtitle = "Kliknij Połącz z H3, aby wczytać R6, R7 i R8." if not self.layers else "Wybierz jedną z siatek w panelu po lewej."
             self.map.create_text(cx,cy-16,text=title,fill=THEME["text"],font=("Segoe UI",20,"bold"),tags="empty")
             self.map.create_text(cx,cy+24,text=subtitle,fill=THEME["muted"],font=("Segoe UI",10),width=max(200,self.map.winfo_width()-80),tags="empty")
         self.photos.clear()
@@ -839,6 +722,7 @@ class GISApp(tk.Tk):
             self.pending.add(key)
             future = self.pool.submit(fetch_tile,layer,z,x,y)
             future.add_done_callback(lambda f,k=key:self.tile_done(k,f))
+        self.draw_selected_hexagon()
         self.status.set(f"MVT | EPSG:3857 | zoom {self.zoom_level} | widoczne kafelki: {cached} | "
                         f"pobieranie: {len(self.pending)} | transfer: {self.bytes_received/1024:.0f} KiB"
                         + (f" | Błędy: {self.tile_errors} — {self.last_error[:140]}" if self.tile_errors else ""))
@@ -886,22 +770,125 @@ class GISApp(tk.Tk):
             self.after(50,self.process_tiles)
 
     def pan_start(self,event):
-        self.drag = (event.x,event.y)
+        self.drag=(event.x,event.y)
+        self.pan_origin=(event.x,event.y)
+        self.pan_moved=False
         self.map.configure(cursor="fleur")
 
     def pan_move(self,event):
         if not self.drag:
             return
-        dx,dy = event.x-self.drag[0],event.y-self.drag[1]
-        size = TILE_SIZE*2**self.zoom_level
-        self.center = (self.center[0]-dx/size,self.center[1]-dy/size)
+        if self.pan_origin and (
+            abs(event.x-self.pan_origin[0])>4 or
+            abs(event.y-self.pan_origin[1])>4
+        ):
+            self.pan_moved=True
+        dx,dy=event.x-self.drag[0],event.y-self.drag[1]
+        size=TILE_SIZE*2**self.zoom_level
+        self.center=(self.center[0]-dx/size,self.center[1]-dy/size)
         self.map.move("tile",dx,dy)
-        self.drag = (event.x,event.y)
+        self.map.move("selected_hex",dx,dy)
+        self.drag=(event.x,event.y)
 
     def pan_end(self,event):
-        self.drag = None
+        clicked=not self.pan_moved
+        self.drag=None
+        self.pan_origin=None
         self.map.configure(cursor="")
         self.schedule_draw()
+        if clicked:
+            self.inspect_cell(event.x,event.y)
+
+    def inspect_cell(self,x,y):
+        """Odczyt konkretnego H3 z PostGIS, bez modyfikacji danych."""
+        layer=next((l for l in self.layers if l["visible"].get()),None)
+        if not layer:
+            return
+        if self.busy:
+            return
+        size=TILE_SIZE*2**self.zoom_level
+        merc_x=(self.center[0]+(x-self.map.winfo_width()/2)/size)*WORLD-HALF_WORLD
+        merc_y=HALF_WORLD-(self.center[1]+(y-self.map.winfo_height()/2)/size)*WORLD
+
+        def work():
+            query=sql.SQL("""
+                SELECT {id}::text, {value},
+                       ST_AsGeoJSON(ST_Transform({geom},3857))
+                FROM {table}
+                WHERE ST_Intersects({geom},ST_Transform(
+                    ST_SetSRID(ST_MakePoint(%s,%s),3857),%s))
+                ORDER BY {id}
+                LIMIT 1
+            """).format(
+                id=sql.Identifier(layer["identity"]),
+                value=(sql.Identifier("przejezdnosc") if layer["has_passability"]
+                       else sql.SQL("NULL::double precision")),
+                table=sql.Identifier(layer["schema"],layer["table"]),
+                geom=sql.Identifier(layer["geom"])
+            )
+            with psycopg.connect(**layer["settings"]) as connection:
+                return connection.execute(query,(merc_x,merc_y,layer["srid"])).fetchone()
+
+        def finished(result):
+            if not any(l["key"]==layer["key"] and l["visible"].get()
+                       for l in self.layers):
+                return  # Wynik z nieaktywnej juz siatki.
+            if result is None:
+                self.selected_hexagon = None
+                self.draw_selected_hexagon()
+                self.cell_info.set("W tym miejscu nie znaleziono heksagonu.")
+            else:
+                h3id,value,geojson=result
+                self.selected_hexagon = {
+                    "layer_key": layer["key"],
+                    "geometry": shape(json.loads(geojson)) if geojson else None,
+                }
+                self.draw_selected_hexagon()
+                if value is None:
+                    score="NULL — wynik nieobliczony"
+                else:
+                    try:
+                        numeric=float(value)
+                        score=(f"{numeric:+.4f}" if math.isfinite(numeric) and -1<=numeric<=1
+                               else "Nieprawidłowa wartość poza zakresem")
+                    except (ValueError,TypeError):
+                        score="Nieprawidłowa wartość"
+                self.cell_info.set(
+                    f"Siatka: {layer['table'].upper()}\n"
+                    f"ID H3: {h3id}\n"
+                    f"Przejezdność: {score}"
+                )
+
+        self.run_background(work,finished)
+
+    def draw_selected_hexagon(self):
+        """Podswietl obrys wybranej komorki na aktualnym widoku mapy."""
+        self.map.delete("selected_hex")
+        selected=self.selected_hexagon
+        if not selected:
+            return
+        if not any(layer["key"]==selected["layer_key"] and layer["visible"].get()
+                   for layer in self.layers):
+            return
+        geom=selected["geometry"]
+        if geom is None or geom.is_empty:
+            return
+        polygons=([geom] if geom.geom_type=="Polygon" else
+                  list(geom.geoms) if geom.geom_type=="MultiPolygon" else [])
+        size=TILE_SIZE*2**self.zoom_level
+        width,height=self.map.winfo_width(),self.map.winfo_height()
+        for polygon in polygons:
+            coordinates=[]
+            for mx,my,*_ in polygon.exterior.coords:
+                x=(mx+HALF_WORLD)/WORLD*size-self.center[0]*size+width/2
+                y=(HALF_WORLD-my)/WORLD*size-self.center[1]*size+height/2
+                coordinates.extend((x,y))
+            if len(coordinates)>=6:
+                self.map.create_polygon(
+                    *coordinates,fill="",outline="#38bdf8",
+                    width=4,joinstyle=tk.ROUND,tags="selected_hex"
+                )
+        self.map.tag_raise("selected_hex")
 
     def wheel(self,event):
         if event.delta:
