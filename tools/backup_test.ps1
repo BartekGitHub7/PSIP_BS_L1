@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $backupDirectory = Join-Path (Get-Location) 'backups'
 New-Item -ItemType Directory -Force -Path $backupDirectory | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-$archiveName = "env-test_$stamp.dump"
+$archiveName = "${Container}_${stamp}.dump"
 $archiveInContainer = "/tmp/$archiveName"
 $destination = Join-Path $backupDirectory $archiveName
 if (Test-Path -LiteralPath $destination) {
