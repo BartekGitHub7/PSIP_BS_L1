@@ -767,22 +767,84 @@ class GISApp(tk.Tk):
             self.after(50,self.process_tiles)
 
     def pan_start(self,event):
-        self.drag = (event.x,event.y)
+        self.drag=(event.x,event.y)
+        self.pan_origin=(event.x,event.y)
+        self.pan_moved=False
         self.map.configure(cursor="fleur")
 
     def pan_move(self,event):
         if not self.drag:
             return
-        dx,dy = event.x-self.drag[0],event.y-self.drag[1]
-        size = TILE_SIZE*2**self.zoom_level
-        self.center = (self.center[0]-dx/size,self.center[1]-dy/size)
+        if self.pan_origin and (
+            abs(event.x-self.pan_origin[0])>4 or
+            abs(event.y-self.pan_origin[1])>4
+        ):
+            self.pan_moved=True
+        dx,dy=event.x-self.drag[0],event.y-self.drag[1]
+        size=TILE_SIZE*2**self.zoom_level
+        self.center=(self.center[0]-dx/size,self.center[1]-dy/size)
         self.map.move("tile",dx,dy)
-        self.drag = (event.x,event.y)
+        self.drag=(event.x,event.y)
 
     def pan_end(self,event):
-        self.drag = None
+        clicked=not self.pan_moved
+        self.drag=None
+        self.pan_origin=None
         self.map.configure(cursor="")
         self.schedule_draw()
+        if clicked:
+            self.inspect_cell(event.x,event.y)
+
+    def inspect_cell(self,x,y):
+        """Odczyt konkretnego H3 z PostGIS, bez modyfikacji danych."""
+        layer=next((l for l in self.layers if l["visible"].get()),None)
+        if not layer:
+            return
+        if self.busy:
+            return
+        size=TILE_SIZE*2**self.zoom_level
+        merc_x=(self.center[0]+(x-self.map.winfo_width()/2)/size)*WORLD-HALF_WORLD
+        merc_y=HALF_WORLD-(self.center[1]+(y-self.map.winfo_height()/2)/size)*WORLD
+
+        def work():
+            query=sql.SQL("""
+                SELECT {id}::text, {value}
+                FROM {table}
+                WHERE ST_Intersects({geom},ST_Transform(
+                    ST_SetSRID(ST_MakePoint(%s,%s),3857),%s))
+                ORDER BY {id}
+                LIMIT 1
+            """).format(
+                id=sql.Identifier(layer["identity"]),
+                value=(sql.Identifier("przejezdnosc") if layer["has_passability"]
+                       else sql.SQL("NULL::double precision")),
+                table=sql.Identifier(layer["schema"],layer["table"]),
+                geom=sql.Identifier(layer["geom"])
+            )
+            with psycopg.connect(**layer["settings"]) as connection:
+                return connection.execute(query,(merc_x,merc_y,layer["srid"])).fetchone()
+
+        def finished(result):
+            if result is None:
+                self.cell_info.set("W tym miejscu nie znaleziono heksagonu.")
+            else:
+                h3id,value=result
+                if value is None:
+                    score="NULL — wynik nieobliczony"
+                else:
+                    try:
+                        numeric=float(value)
+                        score=(f"{numeric:+.4f}" if math.isfinite(numeric) and -1<=numeric<=1
+                               else "Nieprawidłowa wartość poza zakresem")
+                    except (ValueError,TypeError):
+                        score="Nieprawidłowa wartość"
+                self.cell_info.set(
+                    f"Siatka: {layer['table'].upper()}\\n"
+                    f"ID H3: {h3id}\\n"
+                    f"Przejezdność: {score}"
+                )
+
+        self.run_background(work,finished)
 
     def wheel(self,event):
         if event.delta:
