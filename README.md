@@ -4,7 +4,7 @@
 
 [Dokumentacja projektu — zacznij tutaj](docs/README.md) | [Stan prac](docs/STATUS.md) | [Obsługa GUI](docs/GUI.md)
 
-Na branchu `feature/gui-tkinter` znajduje się przeglądarka Tkinter z kafelkami wektorowymi MVT, obsługą warstw oraz polem `przejezdnosc`. Kryteria analizy wielokryterialnej nie zostały jeszcze ustalone. Docelowo wynik ma dwie klasy (0/1); bieżące GUI zachowuje roboczą skalę 0–1 i szary kolor dla brakujących wyników. Szczegóły i ograniczenia opisano w dokumentacji.
+Na gałęzi `env-test` dostępne są GUI oraz audytowana wersja algorytmu IOP w Pythonie: cztery kryteria, wynik ciągły od −1 do +1, analiza 29 wariantów, dwie skale barw i lokalny podgląd dry-run w GUI. [Uruchomienie, progi, testy i odtworzenie danych](docs/IOP.md). Starsze opisy stanu w dokumentacji z 27.10.2026 są historyczne.
 
 laboratorium 1
 - Stanisław - turecki

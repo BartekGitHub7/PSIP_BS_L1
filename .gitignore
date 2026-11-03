@@ -9,3 +9,7 @@ gui/main_before_*.py
 .venv-build/
 build/
 dist/
+data/bdot/
+backup_powiat_minski/
+lab2/
+output/

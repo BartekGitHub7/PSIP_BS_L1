@@ -3,6 +3,7 @@ Wizualizacja od -1 do 1; BDOT pozostaje w bazie jako zrodlo obliczen.
 Kafelki MVT z PostGIS bez serwera HTTP i pobierania pelnych warstw.
 """
 import math
+from iop_display import (passability_color, legend_value, preview_value, load_preview, NO_DATA_COLOR, RAMP)
 import json
 import argparse
 import sys
@@ -14,7 +15,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import psycopg
 from psycopg import sql
 import mapbox_vector_tile
@@ -25,7 +26,6 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.collections import PathCollection, LineCollection
 from matplotlib.path import Path
-from matplotlib.colors import to_rgb, to_hex
 
 COLORS = ["#70a9d1", "#e49b55", "#86b875", "#b28bc4", "#df7777"]
 HALF_WORLD = 20037508.342789244
@@ -34,8 +34,6 @@ TILE_SIZE = 256
 EXTENT = 4096
 BUFFER = 64
 CACHE_LIMIT = 192  # około 48 MiB obrazów RGBA
-NO_DATA_COLOR = "#bdbdbd"
-RAMP = ("#d73027", "#ffffff", "#1a9850")
 RENDER_LOCK = threading.Lock()  # Matplotlib nie jest bezpieczny wielowątkowo
 
 
@@ -125,19 +123,6 @@ def dark_titlebar(window):
         pass
 
 
-def passability_color(value):
-    """Stala skala -1..1: czerwony -> bialy (0) -> zielony; NULL jest szary."""
-    try:
-        value = float(value)
-    except (TypeError, ValueError):
-        return NO_DATA_COLOR
-    if not math.isfinite(value) or not -1 <= value <= 1:
-        return NO_DATA_COLOR
-    a, b = (RAMP[0], RAMP[1]) if value <= 0 else (RAMP[1], RAMP[2])
-    fraction = value + 1 if value <= 0 else value
-    return to_hex(tuple(x+(y-x)*fraction for x,y in zip(to_rgb(a),to_rgb(b))))
-
-
 def describe_layer(connection, row, settings):
     schema, table, geom, srid = row
     srid = int(srid)
@@ -174,6 +159,7 @@ def describe_layer(connection, row, settings):
                 srid=srid, identity=identity, settings=dict(settings),
                 is_grid=(schema == "grid" and bool(re.fullmatch(r"h3_r[678]",table))),
                 has_passability=("przejezdnosc" in columns),
+                has_coverage=("ot_adja_a_area_m2" in columns),
                 bounds=None if bounds[0] is None else tuple(map(float, bounds)))
 
 
@@ -188,7 +174,7 @@ def tile_query(layer):
                        ST_TileEnvelope(%s,%s,%s, margin => 64.0/4096),
                        %s), %s) AS search
         ), features AS (
-            SELECT {id}::text AS id{value},
+            SELECT {id}::text AS id{value}{coverage},
                    ST_AsMVTGeom(ST_Transform(ST_Force2D(t.{geom}),3857),
                                 b.tile,4096,64,true) AS geom
             FROM {table} t CROSS JOIN bounds b
@@ -201,6 +187,8 @@ def tile_query(layer):
                         if layer.get("has_passability") else
                         sql.SQL(', NULL::double precision AS przejezdnosc'))
                         if layer.get("is_grid") else sql.SQL(""),
+                 coverage=(sql.SQL(', t.ot_adja_a_area_m2 / NULLIF(ST_Area(t.{}),0) AS coverage').format(sql.Identifier(layer["geom"]))
+                           if layer.get("is_grid") and layer.get("has_coverage") and layer["srid"]==2180 else sql.SQL("")),
                  geom=sql.Identifier(layer["geom"]),
                  table=sql.Identifier(layer["schema"],layer["table"]))
 
@@ -214,7 +202,21 @@ def fetch_tile(layer, z, x, y):
             (z,x,y,z,x,y,segment,layer["srid"])).fetchone()[0]
     blob = bytes(blob) if blob else b""
     features = [] if not blob else mapbox_vector_tile.decode(blob)["features"]["features"]
-    return paint_tile(features, layer["color"], layer.get("is_grid",False)), len(blob), len(features)
+    for feature in features:
+        props=feature.setdefault('properties',{})
+        props['przejezdnosc'],props['coverage']=preview_value(layer,props.get('id'),props.get('przejezdnosc'),props.get('coverage'))
+    image=paint_tile(features, layer['color'], layer.get('is_grid',False),
+                     layer.get('scale_mode','reference'),layer.get('low_threshold',0.1))
+    if layer.get('context'):
+        for table,color in [('ot_skdr_l','#242424'),('ot_swrs_l','#0066cc')]:
+            context=dict(layer,schema='bdot',table=table,identity='ogc_fid',geom='geom',is_grid=False,has_passability=False,has_coverage=False)
+            with psycopg.connect(**layer['settings']) as connection:
+                overlay=connection.execute(tile_query(context),(z,x,y,z,x,y,segment,layer['srid'])).fetchone()[0]
+            overlay=bytes(overlay) if overlay else b''
+            context_features=[] if not overlay else mapbox_vector_tile.decode(overlay)['features']['features']
+            image.alpha_composite(paint_tile(context_features,color))
+            blob+=overlay
+    return image,len(blob),len(features)
 
 
 def polygon_patch(polygon):
@@ -251,15 +253,19 @@ def collect_parts(geometry, polygons, lines, points):
             collect_parts(part, polygons, lines, points)
 
 
-def paint_tile(features, color, thematic=False):
+def paint_tile(features, color, thematic=False, scale_mode="reference", low_threshold=0.1):
     polygons, lines, points = [], [], []
     polygon_colors, line_colors, point_colors = [], [], []
+    low_polygons=[]
     # Dekoder domyślnie zwraca oś Y skierowaną w górę.
     for feature in features:
         np,nl,nt = len(polygons),len(lines),len(points)
-        feature_color = (passability_color(feature.get("properties",{}).get("przejezdnosc"))
+        feature_color = (passability_color(feature.get("properties",{}).get("przejezdnosc"),scale_mode)
                          if thematic else color)
         collect_parts(shape(feature["geometry"]), polygons, lines, points)
+        coverage=feature.get('properties',{}).get('coverage')
+        if thematic and coverage is not None and coverage < low_threshold:
+            low_polygons.extend(polygons[np:])
         polygon_colors.extend([feature_color]*(len(polygons)-np))
         line_colors.extend([feature_color]*(len(lines)-nl))
         point_colors.extend([feature_color]*(len(points)-nt))
@@ -273,7 +279,10 @@ def paint_tile(features, color, thematic=False):
         ax.set_ylim(0,EXTENT)
         if polygons:
             ax.add_collection(PathCollection(polygons, facecolors=polygon_colors,
-                edgecolors="#64748b", linewidths=0.35, antialiaseds=False), autolim=False)
+                edgecolors="#3d4855", linewidths=0.55, antialiaseds=False), autolim=False)
+        if low_polygons:
+            ax.add_collection(PathCollection(low_polygons,facecolors='none',edgecolors='#444444',
+                              linewidths=0.7,hatch='///'),autolim=False)
         if lines:
             ax.add_collection(LineCollection(lines, colors=line_colors,
                 linewidths=0.85, antialiaseds=False), autolim=False)
@@ -298,6 +307,12 @@ class GISApp(tk.Tk):
         self.geometry("1360x860")
         self.minsize(1080,700)
         self.layers = []
+        self.style_revision=0
+        self.preview_data=None
+        self.low_threshold=0.1
+        self.scale_mode=tk.StringVar(value="reference")
+        self.context_map=tk.BooleanVar(value=False)
+        self.source_info=tk.StringVar(value="Źródło IOP: PostGIS")
         self.last_settings = {}
         self.events = queue.Queue()
         self.tile_events = queue.Queue()
@@ -338,8 +353,17 @@ class GISApp(tk.Tk):
         ttk.Label(toolbar,text="Przesuwanie: lewy przycisk   ·   Zoom: kółko",style="Muted.TLabel").pack(side="right",padx=8)
         layout = ttk.Panedwindow(self,orient="horizontal")
         layout.pack(fill="both",expand=True)
-        sidebar = ttk.Frame(layout,padding=(14,14),width=320)
-        layout.add(sidebar,weight=0)
+        side_holder=ttk.Frame(layout,width=340)
+        layout.add(side_holder,weight=0)
+        self.sidebar_canvas=tk.Canvas(side_holder,width=320,bg=THEME['panel'],highlightthickness=0)
+        side_scroll=ttk.Scrollbar(side_holder,orient='vertical',command=self.sidebar_canvas.yview)
+        self.sidebar_canvas.configure(yscrollcommand=side_scroll.set)
+        side_scroll.pack(side='right',fill='y')
+        self.sidebar_canvas.pack(side='left',fill='both',expand=True)
+        sidebar = ttk.Frame(self.sidebar_canvas,padding=(14,14),width=320)
+        side_window=self.sidebar_canvas.create_window((0,0),window=sidebar,anchor='nw')
+        sidebar.bind('<Configure>',lambda e:self.sidebar_canvas.configure(scrollregion=self.sidebar_canvas.bbox('all')))
+        self.sidebar_canvas.bind('<Configure>',lambda e:self.sidebar_canvas.itemconfigure(side_window,width=e.width))
         ttk.Label(sidebar,text="ROZDZIELCZOŚĆ H3",style="Title.TLabel").pack(anchor="w")
         ttk.Label(sidebar,text="Wybierz R6, R7 lub R8. Na mapie widoczna jest wyłącznie jedna siatka.",
                    wraplength=290,style="Muted.TLabel").pack(anchor="w",pady=(8,10))
@@ -360,24 +384,27 @@ class GISApp(tk.Tk):
         ttk.Label(selected_frame,textvariable=self.cell_info,wraplength=270).pack(anchor="w")
         legend = ttk.LabelFrame(sidebar,text="PRZEJEZDNOŚĆ · −1 DO +1",padding=12)
         legend.pack(fill="x",pady=6)
-        bar = tk.Canvas(legend,width=240,height=30,bg=THEME["panel"],highlightthickness=0)
-        bar.pack(fill="x")
-        for x in range(240):
-            bar.create_line(x,0,x,17,fill=passability_color(-1+2*x/239))
-        for i in range(11):
-            x = round(i*239/10)
-            bar.create_line(x,18,x,26,fill=THEME["text"])
-        labels = ttk.Frame(legend)
-        labels.pack(fill="x")
-        ttk.Label(labels,text="−1").pack(side="left")
-        ttk.Label(labels,text="0").pack(side="left",expand=True)
-        ttk.Label(labels,text="+1").pack(side="right")
-        ttk.Label(legend,text="Czerwony → biały → zielony\n10 równych odcinków po 0,2.",
-                  style="Muted.TLabel").pack(anchor="w",pady=(6,0))
-        empty = ttk.Frame(legend)
-        empty.pack(anchor="w",pady=(6,0))
-        tk.Label(empty,bg=NO_DATA_COLOR,width=3,relief="flat").pack(side="left",padx=(0,5))
-        ttk.Label(empty,text="NULL — wynik nieobliczony").pack(side="left")
+        ttk.Radiobutton(legend,text='Referencyjna −1…+1',variable=self.scale_mode,value='reference').pack(anchor='w')
+        ttk.Radiobutton(legend,text='Kontrastowa −0,5…+0,5',variable=self.scale_mode,value='contrast').pack(anchor='w')
+        self.scale_mode.trace_add('write',lambda *_:self.change_display())
+        self.legend_bar=tk.Canvas(legend,width=240,height=48,bg=THEME['panel'],highlightthickness=0)
+        self.legend_bar.pack(fill='x',pady=4)
+        self.legend_note=tk.StringVar()
+        ttk.Label(legend,textvariable=self.legend_note,wraplength=270,style='Muted.TLabel').pack(anchor='w')
+        ttk.Label(legend,text='Szary = brak IOP • /// = małe pokrycie',wraplength=270).pack(anchor='w',pady=4)
+        ttk.Checkbutton(legend,text='Tło lokalne: drogi / cieki BDOT',variable=self.context_map,command=self.change_display).pack(anchor='w')
+        ttk.Label(legend,text='Drogi: czarne; cieki: niebieskie',style='Muted.TLabel').pack(anchor='w')
+        ttk.Button(sidebar,text='Wczytaj wyniki dry-run…',command=self.open_preview).pack(fill='x',pady=(6,2))
+        ttk.Button(sidebar,text='Pokaż wyniki z PostGIS',command=self.use_database_scores).pack(fill='x')
+        ttk.Label(sidebar,textvariable=self.source_info,wraplength=290,style='Muted.TLabel').pack(anchor='w',pady=5)
+        self.draw_legend()
+        def bind_sidebar_wheel(widget):
+            def scroll(event):
+                self.sidebar_canvas.yview_scroll(-1 if event.delta>0 else 1,'units')
+                return 'break'
+            widget.bind('<MouseWheel>',scroll)
+            for child in widget.winfo_children():bind_sidebar_wheel(child)
+        bind_sidebar_wheel(sidebar)
         map_panel = ttk.Frame(layout)
         layout.add(map_panel,weight=1)
         map_heading = ttk.Frame(map_panel,padding=(14,10))
@@ -397,6 +424,64 @@ class GISApp(tk.Tk):
         self.schedule_draw()
         self.after(100,self.process_events)
         self.after(50,self.process_tiles)
+
+    def draw_legend(self):
+        mode=self.scale_mode.get()
+        bar=self.legend_bar
+        bar.delete('all')
+        for x in range(240):
+            bar.create_line(x,0,x,18,fill=passability_color(legend_value(-1+2*x/239,mode),mode))
+        for i in range(5):
+            position=-1+i/2
+            x=round(i*239/4)
+            bar.create_line(x,19,x,24,fill=THEME['text'])
+            bar.create_text(x,35,text=f'{legend_value(position,mode):+.2f}',fill=THEME['text'],anchor='w' if i==0 else 'e' if i==4 else 'center',font=('Segoe UI',8))
+        self.legend_note.set('Referencyjna: liniowo −1…+1.' if mode=='reference' else
+            'Kontrast: stały zakres −0,50…+0,50; gamma 0,65. Barwy nasycone dla IOP ≤−0,50 i ≥+0,50. Wartości IOP bez zmian.')
+
+    def change_display(self):
+        self.style_revision+=1
+        self.cache.clear()
+        self.error_keys.clear()
+        for layer in self.layers:
+            layer.update(scale_mode=self.scale_mode.get(),context=self.context_map.get(),low_threshold=self.low_threshold,
+                         preview=None if self.preview_data is None else self.preview_data.get(layer['table'],{}))
+        self.draw_legend()
+        self.schedule_draw()
+
+    def open_preview(self):
+        if not self.layers:
+            messagebox.showinfo('Dry-run','Najpierw połącz z siatkami H3 w env-test.')
+            return
+        folder=filedialog.askdirectory(title='Katalog z report.json i trzema plikami CSV')
+        if not folder:
+            return
+        def work():
+            datasets,low,report=load_preview(folder)
+            for layer in self.layers:
+                if int(layer['settings'].get('port',0))!=5444 or layer['settings'].get('host') not in ('localhost','127.0.0.1'):
+                    raise ValueError('Dry-run dozwolony tylko dla lokalnego env-test (5444).')
+                expected=report.get('source_fingerprints',{}).get(layer['table'])
+                if not expected:
+                    raise ValueError('Raport nie ma odcisków danych. Uruchom aktualny dry-run.')
+                with psycopg.connect(**layer['settings']) as conn:
+                    actual=conn.execute(sql.SQL("SELECT md5(string_agg(to_jsonb(h)::text, '' ORDER BY h3_id)) FROM {} h").format(sql.Identifier('grid',layer['table']))).fetchone()[0]
+                if actual!=expected:
+                    raise ValueError('Dane w bazie zmieniły się od dry-run. Przelicz raport.')
+            return datasets,low
+        def finished(result):
+            self.preview_data,self.low_threshold=result
+            self.source_info.set('Źródło IOP: DRY-RUN (lokalny CSV)\n'+FilePath(folder).name)
+            self.cell_info.set('Podgląd dry-run. Kliknij heksagon, aby odczytać IOP i kryteria.')
+            self.change_display()
+        self.run_background(work,finished)
+
+    def use_database_scores(self):
+        self.preview_data=None
+        self.low_threshold=0.1
+        self.source_info.set('Źródło IOP: PostGIS')
+        self.cell_info.set('Wyniki zapisane w bazie; kliknij heksagon.')
+        self.change_display()
 
     def run_background(self, work, finished, failed=None):
         if self.busy:
@@ -493,6 +578,10 @@ class GISApp(tk.Tk):
                     label:var.get() for label,var in fields.items() if label!="Hasło"
                 }
                 self.layers=[]
+                self.preview_data=None
+                self.low_threshold=0.1
+                self.source_info.set("Źródło IOP: PostGIS")
+                self.style_revision+=1
                 self.cache.clear()
                 self.error_keys.clear()
                 self.pending.clear()
@@ -515,6 +604,8 @@ class GISApp(tk.Tk):
         self.serial+=1
         layer.update(key=self.serial,color="#ffffff",
                      visible=tk.BooleanVar(value=False))
+        layer.update(scale_mode=self.scale_mode.get(),context=self.context_map.get(),low_threshold=self.low_threshold,
+                     preview=None if self.preview_data is None else self.preview_data.get(layer["table"],{}))
         self.layers.append(layer)
         self.refresh_layer_tree()
 
@@ -638,10 +729,11 @@ class GISApp(tk.Tk):
                 for row in rows[:100]:
                     values = [str(row[0]), (row[1] or "NULL")[:200]]
                     if layer.get("is_grid"):
-                        values.append("NULL — brak danych" if row[2] is None else f"{row[2]:.4f}")
+                        score,_=preview_value(layer,row[0],row[2])
+                        values.append("NULL — brak danych" if score is None else f"{score:.4f}")
                     table.insert("","end",values=values)
                 info.configure(text=f"Strona {offset+1} | {len(rows[:100])} rekordów | WKT skrócony do 200 znaków | "
-                                    f"EPSG:{layer['srid']} | NULL = brak wyniku")
+                                    f"EPSG:{layer['srid']} | Źródło: {'DRY-RUN' if layer.get('preview') is not None else 'PostGIS'}")
                 prev.configure(state="normal" if offset else "disabled")
                 nxt.configure(state="normal" if len(rows)>100 else "disabled")
             def failed():
@@ -704,7 +796,7 @@ class GISApp(tk.Tk):
                     tx,ty = x*span-HALF_WORLD,HALF_WORLD-y*span
                     if tx> xmax+margin or tx+span<xmin-margin or ty<ymin-margin or ty-span>ymax+margin:
                         continue
-                key = (layer["key"],z,x,y)
+                key = (layer["key"],z,x,y,self.style_revision)
                 self.visible_keys.add(key)
                 if key in self.cache:
                     image = self.cache.pop(key)
@@ -720,7 +812,7 @@ class GISApp(tk.Tk):
         # Kolejka nie rośnie przy szybkim zoomie. Maksymalnie trzy aktywne kafelki.
         for _,layer,key,z,x,y in wanted[:max(0,3-len(self.pending))]:
             self.pending.add(key)
-            future = self.pool.submit(fetch_tile,layer,z,x,y)
+            future = self.pool.submit(fetch_tile,dict(layer),z,x,y)
             future.add_done_callback(lambda f,k=key:self.tile_done(k,f))
         self.draw_selected_hexagon()
         self.status.set(f"MVT | EPSG:3857 | zoom {self.zoom_level} | widoczne kafelki: {cached} | "
@@ -741,6 +833,9 @@ class GISApp(tk.Tk):
                 self.pending.discard(key)
                 if not any(l["key"]==key[0] for l in self.layers):
                     changed = True
+                    continue
+                if len(key)>4 and key[4]!=self.style_revision:
+                    changed=True
                     continue
                 if error:
                     self.error_keys.add(key)
@@ -813,7 +908,7 @@ class GISApp(tk.Tk):
         def work():
             query=sql.SQL("""
                 SELECT {id}::text, {value},
-                       ST_AsGeoJSON(ST_Transform({geom},3857))
+                       ST_AsGeoJSON(ST_Transform({geom},3857)), {coverage}
                 FROM {table}
                 WHERE ST_Intersects({geom},ST_Transform(
                     ST_SetSRID(ST_MakePoint(%s,%s),3857),%s))
@@ -821,6 +916,8 @@ class GISApp(tk.Tk):
                 LIMIT 1
             """).format(
                 id=sql.Identifier(layer["identity"]),
+                coverage=(sql.SQL("ot_adja_a_area_m2 / NULLIF(ST_Area({}),0)").format(sql.Identifier(layer["geom"]))
+                          if layer.get("has_coverage") and layer["srid"] == 2180 else sql.SQL("NULL::double precision")),
                 value=(sql.Identifier("przejezdnosc") if layer["has_passability"]
                        else sql.SQL("NULL::double precision")),
                 table=sql.Identifier(layer["schema"],layer["table"]),
@@ -838,7 +935,10 @@ class GISApp(tk.Tk):
                 self.draw_selected_hexagon()
                 self.cell_info.set("W tym miejscu nie znaleziono heksagonu.")
             else:
-                h3id,value,geojson=result
+                h3id,value,geojson,coverage=result
+                value,coverage=preview_value(layer,h3id,value,coverage)
+                low_threshold=layer.get("low_threshold",0.1)
+                record=(layer.get("preview") or {}).get(str(h3id))
                 self.selected_hexagon = {
                     "layer_key": layer["key"],
                     "geometry": shape(json.loads(geojson)) if geojson else None,
@@ -857,6 +957,11 @@ class GISApp(tk.Tk):
                     f"Siatka: {layer['table'].upper()}\n"
                     f"ID H3: {h3id}\n"
                     f"Przejezdność: {score}"
+                    + (f"\nPokrycie danymi: {coverage:.2%}"
+                       + (f" — NISKIE (<{low_threshold:.0%})" if coverage < low_threshold else "")
+                       if coverage is not None else "")
+                    + ("\nŹródło: DRY-RUN" if layer.get("preview") is not None else "\nŹródło: PostGIS")
+                    + ("\nK1/K2/K3/K4: " + " / ".join(f"{float(record[k]):+.3f}" for k in ("k_land","k_hydro","k_roads","k_buildings")) if record else "")
                 )
 
         self.run_background(work,finished)
