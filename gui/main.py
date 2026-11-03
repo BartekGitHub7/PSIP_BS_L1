@@ -553,10 +553,10 @@ class GISApp(tk.Tk):
         if layer is None:
             self.layer_info.set("Połącz się z bazą, aby wczytać siatki H3.")
         else:
-            self.layer_info.set(f"Aktywna siatka: {layer['table'].upper()}\\n"
+            self.layer_info.set(f"Aktywna siatka: {layer['table'].upper()}\n"
                 "Przejezdność −1…+1; NULL = brak obliczeń."
                 + ("" if layer["has_passability"] else
-                   "\\nBrak kolumny przejezdnosc — uruchom migrację SQL."))
+                   "\nBrak kolumny przejezdnosc — uruchom migrację SQL."))
 
     def layer_clicked(self,event=None):
         layer=self.selected_layer()
@@ -566,9 +566,7 @@ class GISApp(tk.Tk):
     def fit_selected(self):
         layer = self.selected_layer()
         if layer:
-            layer["visible"].set(True)
-            self.refresh_layer_tree(layer["key"])
-            self.fit_bounds([layer["bounds"]] if layer["bounds"] else [])
+            self.choose_resolution(layer["table"])
 
     def fit_layers(self):
         self.fit_bounds([l["bounds"] for l in self.layers if l["visible"].get() and l["bounds"]])
@@ -839,8 +837,8 @@ class GISApp(tk.Tk):
                     except (ValueError,TypeError):
                         score="Nieprawidłowa wartość"
                 self.cell_info.set(
-                    f"Siatka: {layer['table'].upper()}\\n"
-                    f"ID H3: {h3id}\\n"
+                    f"Siatka: {layer['table'].upper()}\n"
+                    f"ID H3: {h3id}\n"
                     f"Przejezdność: {score}"
                 )
 
