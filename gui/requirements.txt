@@ -1,0 +1,5 @@
+psycopg[binary]>=3.2,<4
+mapbox-vector-tile>=2.2,<3
+shapely>=2,<3
+matplotlib>=3.8,<4
+Pillow>=10,<13

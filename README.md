@@ -1,5 +1,11 @@
 # PSIP\_BS\_L1
 
+## Aktualna dokumentacja i aplikacja GUI
+
+[Dokumentacja projektu — zacznij tutaj](docs/README.md) | [Stan prac](docs/STATUS.md) | [Obsługa GUI](docs/GUI.md)
+
+Na gałęzi `env-test` dostępne są GUI oraz audytowana wersja algorytmu IOP w Pythonie: cztery kryteria, wynik ciągły od −1 do +1, analiza 29 wariantów, dwie skale barw i lokalny podgląd dry-run w GUI. [Uruchomienie, progi, testy i odtworzenie danych](docs/IOP.md). Starsze opisy stanu w dokumentacji z 27.10.2026 są historyczne.
+
 laboratorium 1
 - Stanisław - turecki
 * Bartek - radomszczański

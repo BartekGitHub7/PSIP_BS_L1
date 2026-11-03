@@ -1,0 +1,33 @@
+{
+  "weights": [
+    1.6,
+    1.2,
+    0.8,
+    0.4
+  ],
+  "low_coverage": 0.1,
+  "pt_tolerance": 0.01,
+  "water_fraction": 0.2,
+  "wetland_fraction": 0.2,
+  "water_lines_km_km2": 5.0,
+  "ditch_factor": 0.25,
+  "roads_km_km2": 10.0,
+  "roads_mode": "bonus",
+  "buildings_fraction": 0.2,
+  "land_scores": {
+    "ptgn": -0.2,
+    "ptkm": 0,
+    "ptlz": -0.8,
+    "ptnz": -0.5,
+    "ptpl": 0,
+    "ptrk": -0.6,
+    "ptso": -0.5,
+    "pttr": 0.6,
+    "ptut": -0.3,
+    "ptwp": 0,
+    "ptwz": -0.7,
+    "ptzb": 0
+  },
+  "model_version": "2-audited",
+  "parameter_status": "expert_hypotheses_not_calibrated"
+}
